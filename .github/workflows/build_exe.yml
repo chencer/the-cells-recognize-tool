@@ -1,0 +1,35 @@
+name: Build Windows EXE
+
+on:
+  push:
+    branches: [ main ]  # 只要你上传代码，打包就会自动开始
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pyinstaller
+
+    - name: Build EXE
+      run: |
+        # 将 cyto3 打包进根目录，生成单个 cells_find.exe
+        pyinstaller --noconsole --onefile --add-data "cyto3;." cells_find.py
+
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: Windows_Program
+        path: dist/cells_find.exe
