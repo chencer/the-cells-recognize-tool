@@ -92,8 +92,8 @@ class CellAppCP3:
         self.root.update()
         
         try:
-            # 使用针对你图片的最佳参数
-            masks, flows, styles, diams = self.model.eval(
+            # --- 核心修复：去掉了 diams，并加上 [:3] 保证绝对兼容 ---
+            masks, flows, styles = self.model.eval(
                 self.raw_image, 
                 diameter=120, 
                 channels=[3,0], 
@@ -101,7 +101,9 @@ class CellAppCP3:
                 cellprob_threshold=-2.0,
                 min_size=200,
                 resample=True
-            )
+            )[:3] 
+            # ----------------------------------------------------
+            
             self.render_results(masks)
         except Exception as e:
             messagebox.showerror("识别失败", f"{e}")
@@ -136,7 +138,7 @@ class CellAppCP3:
             cv2.drawContours(res_img, contours, -1, color, thickness)
 
         self.display_image(res_img)
-        self.status_label.config(text=f"✅ 完成 已标注2个高亮目标", fg="green")
+        self.status_label.config(text=f"✅ 完成 已标注2个目标", fg="green")
 
     def display_image(self, img):
         img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
