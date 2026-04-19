@@ -2,5 +2,5 @@ opencv-python
 Pillow
 numpy==1.26.4
 cellpose==3.0.11
-torch
-torchvision
+torch==2.4.1
+torchvision==0.19.1
