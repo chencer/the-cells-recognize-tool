@@ -18,7 +18,7 @@ def get_resource_path(relative_path):
 class CellAppCP3:
     def __init__(self, root):
         self.root = root
-        self.root.title("Cellpose v3.0 - 独立封装版")
+        self.root.title("Cellpose v3.0")
         self.root.geometry("1100x900")
         
         self.raw_image = None
@@ -28,7 +28,19 @@ class CellAppCP3:
         self.setup_ui()
 
     def init_model(self):
-        """加载 CP3 引擎，适配打包路径"""
+        import torch
+        from cellpose import models
+        import os
+        import ssl
+        
+        # --- 核心修复：允许加载自定义模型权重 ---
+        # 这行代码告诉 PyTorch 2.6+ 不要使用严格的 weights_only 模式
+        torch.serialization.add_safe_globals([models.CellposeModel]) 
+        # 如果上面那行不行，可以用下面这个最暴力的（推荐）：
+        import torch.serialization
+        torch.load = lambda *args, **kwargs: torch.serialization.load(*args, **kwargs, weights_only=False)
+        # ---------------------------------------
+
         ssl._create_default_https_context = ssl._create_unverified_context
         print("正在定位模型文件...")
         
@@ -56,11 +68,11 @@ class CellAppCP3:
         btn_frame.pack(pady=10)
         
         tk.Button(btn_frame, text="1. 导入图片", command=self.load_image, width=15).pack(side=tk.LEFT, padx=5)
-        self.run_btn = tk.Button(btn_frame, text="2. 识别最亮大细胞", command=self.run_analysis, 
+        self.run_btn = tk.Button(btn_frame, text="2. 细胞识别", command=self.run_analysis, 
                                  state=tk.DISABLED, width=15, bg="#28a745")
         self.run_btn.pack(side=tk.LEFT, padx=5)
         
-        self.status_label = tk.Label(self.root, text="就绪 | 目标：寻找能量最强2个细胞", fg="blue")
+        self.status_label = tk.Label(self.root, text="准备就绪", fg="blue")
         self.status_label.pack()
 
         self.canvas = tk.Canvas(self.root, bg="#1e1e1e", width=1000, height=650)
@@ -76,7 +88,7 @@ class CellAppCP3:
 
     def run_analysis(self):
         if self.raw_image is None: return
-        self.status_label.config(text="🚀 正在分析中...", fg="orange")
+        self.status_label.config(text="正在分析中...", fg="orange")
         self.root.update()
         
         try:
@@ -124,7 +136,7 @@ class CellAppCP3:
             cv2.drawContours(res_img, contours, -1, color, thickness)
 
         self.display_image(res_img)
-        self.status_label.config(text=f"✅ 完成！已锁定最强2个目标", fg="green")
+        self.status_label.config(text=f"✅ 完成 已标注2个高亮目标", fg="green")
 
     def display_image(self, img):
         img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
