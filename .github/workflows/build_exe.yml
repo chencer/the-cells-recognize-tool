@@ -32,5 +32,5 @@ jobs:
     - name: Upload Artifact
       uses: actions/upload-artifact@v4  # 核心修复：升级到 v4
       with:
-        name: Windows_Program
+        name: Cells
         path: dist/cells_find.exe
