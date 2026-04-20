@@ -117,28 +117,43 @@ class CellAppCP3:
         for cid in cell_ids:
             mask = (masks == cid).astype(np.uint8)
             cell_pixels = gray[mask > 0]
-            if len(cell_pixels) > 0:
-                total_energy = np.sum(cell_pixels)
+            
+            if len(cell_pixels) > 50: # 过滤掉太小的噪点
+                # --- 核心改进：取该细胞内最亮的 10% 像素的平均值 ---
+                # 将像素从大到小排序
+                sorted_pixels = np.sort(cell_pixels)[::-1]
+                # 取前 10% 的数量
+                top_10_count = max(1, int(len(sorted_pixels) * 0.1))
+                # 计算这前 10% 的平均值，这代表了细胞的“核心亮度”
+                core_brightness = np.mean(sorted_pixels[:top_10_count])
+                # ----------------------------------------------
+                
                 M = cv2.moments(mask)
                 if M["m00"] > 0:
                     cx, cy = int(M["m10"]/M["m00"]), int(M["m01"]/M["m00"])
-                    cell_list.append({"energy": total_energy, "pos": (cx, cy), "mask": mask})
+                    cell_list.append({
+                        "brightness": core_brightness, 
+                        "pos": (cx, cy), 
+                        "mask": mask
+                    })
 
-        cell_list.sort(key=lambda x: x['energy'], reverse=True)
+        # 按核心亮度排序
+        cell_list.sort(key=lambda x: x['brightness'], reverse=True)
 
         for idx, cell in enumerate(cell_list):
             contours, _ = cv2.findContours(cell['mask'], cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            color = (0, 0, 255) if idx < 2 else (0, 255, 255) # 前2红，其余黄
+            color = (0, 0, 255) if idx < 2 else (0, 255, 255)
             thickness = 4 if idx < 2 else 2
             
             if idx < 2:
-                cv2.putText(res_img, f"BRIGHTEST #{idx+1}", (cell['pos'][0]-50, cell['pos'][1]-20), 
+                # 标注时显示核心亮度，方便你核对
+                cv2.putText(res_img, f"CORE:{int(cell['brightness'])}", (cell['pos'][0]-50, cell['pos'][1]-20), 
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
             
             cv2.drawContours(res_img, contours, -1, color, thickness)
 
         self.display_image(res_img)
-        self.status_label.config(text=f"✅ 完成 已标注2个目标", fg="green")
+        self.status_label.config(text=f"✅ 完成 已标注2个高亮目标", fg="green")
 
     def display_image(self, img):
         img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
