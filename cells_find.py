@@ -113,28 +113,30 @@ class CellAppCP3:
         gray = cv2.cvtColor(self.raw_image, cv2.COLOR_BGR2GRAY)
         cell_ids = np.unique(masks)[1:]
         
+        h_img, w_img = gray.shape[:2]
         cell_list = []
         for cid in cell_ids:
             mask = (masks == cid).astype(np.uint8)
+
+            # 过滤边缘不完整细胞：mask 触碰图片任意边界则跳过
+            if (mask[0, :].any() or mask[-1, :].any() or
+                    mask[:, 0].any() or mask[:, -1].any()):
+                continue
+
             cell_pixels = gray[mask > 0]
-            
-            if len(cell_pixels) > 50: # 过滤掉太小的噪点
-                # --- 核心改进：取该细胞内最亮的 10% 像素的平均值 ---
-                # 将像素从大到小排序
+
+            if len(cell_pixels) > 50:
                 sorted_pixels = np.sort(cell_pixels)[::-1]
-                # 取前 10% 的数量
                 top_10_count = max(1, int(len(sorted_pixels) * 0.1))
-                # 计算这前 10% 的平均值，这代表了细胞的“核心亮度”
                 core_brightness = np.mean(sorted_pixels[:top_10_count])
-                # ----------------------------------------------
-                
+
                 M = cv2.moments(mask)
-                if M["m00"] > 0:
-                    cx, cy = int(M["m10"]/M["m00"]), int(M["m01"]/M["m00"])
+                if M[“m00”] > 0:
+                    cx, cy = int(M[“m10”]/M[“m00”]), int(M[“m01”]/M[“m00”])
                     cell_list.append({
-                        "brightness": core_brightness, 
-                        "pos": (cx, cy), 
-                        "mask": mask
+                        “brightness”: core_brightness,
+                        “pos”: (cx, cy),
+                        “mask”: mask
                     })
 
         # 按核心亮度排序
@@ -145,15 +147,29 @@ class CellAppCP3:
             color = (0, 0, 255) if idx < 2 else (0, 255, 255)
             thickness = 4 if idx < 2 else 2
             
-            if idx < 2:
-                # 标注时显示核心亮度，方便你核对
-                cv2.putText(res_img, f"CORE:{int(cell['brightness'])}", (cell['pos'][0]-50, cell['pos'][1]-20), 
+            if idx == 0:
+                cx, cy = cell['pos']
+                brightness_val = int(cell['brightness'])
+                cv2.putText(res_img, f"BRIGHTEST  ({cx},{cy})  val:{brightness_val}",
+                            (cx - 60, cy - 20),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2)
+            elif idx == 1:
+                cv2.putText(res_img, f"CORE:{int(cell['brightness'])}", (cell['pos'][0]-50, cell['pos'][1]-20),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-            
+
             cv2.drawContours(res_img, contours, -1, color, thickness)
 
+        if cell_list:
+            top = cell_list[0]
+            cx, cy = top['pos']
+            brightness_val = int(top['brightness'])
+            status_msg = f"✅ 完成  最亮细胞: 坐标({cx}, {cy})  亮度={brightness_val}"
+            print(status_msg)
+        else:
+            status_msg = "✅ 完成（未检测到有效细胞）"
+
         self.display_image(res_img)
-        self.status_label.config(text=f"✅ 完成 已标注2个高亮目标", fg="green")
+        self.status_label.config(text=status_msg, fg="green")
 
     def display_image(self, img):
         img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
