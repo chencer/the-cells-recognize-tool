@@ -1,37 +1,38 @@
-import cv2
-import numpy as np
+import os
 import sys
 import ssl
+import cv2
+import numpy as np
 import torch
 
+os.environ.setdefault("PYTHONIOENCODING", "utf-8")
 ssl._create_default_https_context = ssl._create_unverified_context
 
 print(f"Python: {sys.version}")
 print(f"OpenCV: {cv2.__version__}")
-print(f"Torch: {torch.__version__}")
+print(f"Torch:  {torch.__version__}")
 
-# --- 加载图片 ---
-img = cv2.imread('test_cell.tif', cv2.IMREAD_COLOR)
-assert img is not None, "图片加载失败"
-print(f"图像尺寸: {img.shape[1]}x{img.shape[0]}, dtype: {img.dtype}")
+# --- Load image ---
+img = cv2.imread("test_cell.tif", cv2.IMREAD_COLOR)
+assert img is not None, "Image load failed"
+print(f"Image: {img.shape[1]}x{img.shape[0]}, dtype={img.dtype}")
 
-# --- 加载 Cellpose 模型 ---
+# --- Load Cellpose model ---
 from cellpose import models
 torch.load = lambda *args, **kwargs: torch.serialization.load(*args, **kwargs, weights_only=False)
 use_gpu = torch.cuda.is_available()
-print(f"GPU 加速: {use_gpu}")
+print(f"GPU: {use_gpu}")
 
-import os
 model_path = "cyto3"
 if os.path.exists(model_path):
     model = models.CellposeModel(gpu=use_gpu, pretrained_model=model_path)
-    print("模型: 本地 cyto3")
+    print("Model: local cyto3")
 else:
     model = models.Cellpose(gpu=use_gpu, model_type="cyto3")
-    print("模型: 系统 cyto3")
+    print("Model: system cyto3")
 
-# --- 细胞分割 ---
-print("正在分割...")
+# --- Segmentation ---
+print("Running segmentation...")
 masks, flows, styles = model.eval(
     img,
     diameter=120,
@@ -43,10 +44,10 @@ masks, flows, styles = model.eval(
 )[:3]
 
 cell_ids = np.unique(masks)[1:]
-print(f"分割到细胞总数: {len(cell_ids)}")
-assert len(cell_ids) > 0, "未检测到任何细胞"
+print(f"Total cells detected: {len(cell_ids)}")
+assert len(cell_ids) > 0, "No cells detected"
 
-# --- 边缘过滤 + 亮度排名 ---
+# --- Edge filter + brightness ranking ---
 gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 cell_list = []
 skipped_edge = 0
@@ -69,14 +70,14 @@ for cid in cell_ids:
 
 cell_list.sort(key=lambda x: x["brightness"], reverse=True)
 
-print(f"边缘截断过滤: {skipped_edge} 个")
-print(f"有效细胞数: {len(cell_list)}")
-assert len(cell_list) > 0, "过滤后无有效细胞"
+print(f"Edge-truncated filtered: {skipped_edge}")
+print(f"Valid cells: {len(cell_list)}")
+assert len(cell_list) > 0, "No valid cells after filtering"
 
 top = cell_list[0]
-print(f"\n最亮细胞: 坐标={top['pos']}  亮度={int(top['brightness'])}")
+print(f"Brightest cell: pos={top['pos']}  brightness={int(top['brightness'])}")
 
-# --- 生成标注图 ---
+# --- Annotated output ---
 res = img.copy()
 for i, cid in enumerate(np.unique(masks)[1:]):
     mask = (masks == cid).astype(np.uint8)
@@ -89,6 +90,6 @@ for i, cid in enumerate(np.unique(masks)[1:]):
 cx, cy = top["pos"]
 cv2.putText(res, f"BRIGHTEST ({cx},{cy}) val:{int(top['brightness'])}",
             (cx - 60, cy - 15), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-cv2.imwrite('result.jpg', res)
-print("标注图已保存: result.jpg")
-print("\n✅ 全部测试通过")
+cv2.imwrite("result.jpg", res)
+print("Result saved: result.jpg")
+print("ALL TESTS PASSED")
