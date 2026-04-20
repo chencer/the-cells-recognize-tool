@@ -96,9 +96,9 @@ class CellAppCP3:
             masks, flows, styles = self.model.eval(
                 self.raw_image, 
                 diameter=120, 
-                channels=[3,0], 
+                channels=[0,0], 
                 flow_threshold=0.95, 
-                cellprob_threshold=-2.0,
+                cellprob_threshold=1.0,
                 min_size=200,
                 resample=True
             )[:3] 
