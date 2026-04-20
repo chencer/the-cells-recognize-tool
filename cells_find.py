@@ -131,12 +131,12 @@ class CellAppCP3:
                 core_brightness = np.mean(sorted_pixels[:top_10_count])
 
                 M = cv2.moments(mask)
-                if M[“m00”] > 0:
-                    cx, cy = int(M[“m10”]/M[“m00”]), int(M[“m01”]/M[“m00”])
+                if M["m00"] > 0:
+                    cx, cy = int(M["m10"]/M["m00"]), int(M["m01"]/M["m00"])
                     cell_list.append({
-                        “brightness”: core_brightness,
-                        “pos”: (cx, cy),
-                        “mask”: mask
+                        "brightness": core_brightness,
+                        "pos": (cx, cy),
+                        "mask": mask
                     })
 
         # 按核心亮度排序
