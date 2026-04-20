@@ -112,59 +112,63 @@ class CellAppCP3:
         res_img = self.raw_image.copy()
         gray = cv2.cvtColor(self.raw_image, cv2.COLOR_BGR2GRAY)
         cell_ids = np.unique(masks)[1:]
-        
-        h_img, w_img = gray.shape[:2]
+
+        total_detected = len(cell_ids)
+        skipped_incomplete = 0
         cell_list = []
+
         for cid in cell_ids:
             mask = (masks == cid).astype(np.uint8)
 
-            # 过滤边缘不完整细胞：mask 触碰图片任意边界则跳过
-            if (mask[0, :].any() or mask[-1, :].any() or
-                    mask[:, 0].any() or mask[:, -1].any()):
+            # 用凸包完整度过滤：mask像素面积 / 凸包面积 < 70% 则剔除
+            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if not contours:
+                skipped_incomplete += 1
+                continue
+            hull = cv2.convexHull(contours[0])
+            hull_area = cv2.contourArea(hull)
+            if hull_area == 0:
+                skipped_incomplete += 1
+                continue
+            mask_area = float(np.sum(mask > 0))
+            completeness = mask_area / hull_area
+            if completeness < 0.7:
+                skipped_incomplete += 1
                 continue
 
             cell_pixels = gray[mask > 0]
-
             if len(cell_pixels) > 50:
                 sorted_pixels = np.sort(cell_pixels)[::-1]
-                top_10_count = max(1, int(len(sorted_pixels) * 0.1))
-                core_brightness = np.mean(sorted_pixels[:top_10_count])
+                top_5_count = max(1, int(len(sorted_pixels) * 0.05))
+                peak_brightness = np.mean(sorted_pixels[:top_5_count])
 
                 M = cv2.moments(mask)
                 if M["m00"] > 0:
                     cx, cy = int(M["m10"]/M["m00"]), int(M["m01"]/M["m00"])
                     cell_list.append({
-                        "brightness": core_brightness,
+                        "brightness": peak_brightness,
                         "pos": (cx, cy),
                         "mask": mask
                     })
 
-        # 按核心亮度排序
+        print(f"检测总数: {total_detected}  过滤掉(完整度<70%): {skipped_incomplete}  有效细胞: {len(cell_list)}")
+
+        # 按峰值亮度排序，只标注最亮的一个
         cell_list.sort(key=lambda x: x['brightness'], reverse=True)
-
-        for idx, cell in enumerate(cell_list):
-            contours, _ = cv2.findContours(cell['mask'], cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            color = (0, 0, 255) if idx < 2 else (0, 255, 255)
-            thickness = 4 if idx < 2 else 2
-            
-            if idx == 0:
-                cx, cy = cell['pos']
-                brightness_val = int(cell['brightness'])
-                cv2.putText(res_img, f"BRIGHTEST  ({cx},{cy})  val:{brightness_val}",
-                            (cx - 60, cy - 20),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 255, 255), 2)
-            elif idx == 1:
-                cv2.putText(res_img, f"CORE:{int(cell['brightness'])}", (cell['pos'][0]-50, cell['pos'][1]-20),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-
-            cv2.drawContours(res_img, contours, -1, color, thickness)
 
         if cell_list:
             top = cell_list[0]
             cx, cy = top['pos']
             brightness_val = int(top['brightness'])
+
+            contours, _ = cv2.findContours(top['mask'], cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            cv2.drawContours(res_img, contours, -1, (0, 0, 255), 2)
+            cv2.circle(res_img, (cx, cy), 5, (0, 0, 255), -1)
+            cv2.putText(res_img, f"({cx}, {cy})", (cx + 8, cy - 8),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+
             status_msg = f"✅ 完成  最亮细胞: 坐标({cx}, {cy})  亮度={brightness_val}"
-            print(status_msg)
+            print(f"最亮细胞坐标: ({cx}, {cy})  亮度值: {brightness_val}")
         else:
             status_msg = "✅ 完成（未检测到有效细胞）"
 
