@@ -111,6 +111,7 @@ class CellAppCP3:
     def render_results(self, masks):
         res_img = self.raw_image.copy()
         gray = cv2.cvtColor(self.raw_image, cv2.COLOR_BGR2GRAY)
+        H, W = gray.shape
         cell_ids = np.unique(masks)[1:]
 
         total_detected = len(cell_ids)
@@ -120,7 +121,13 @@ class CellAppCP3:
         for cid in cell_ids:
             mask = (masks == cid).astype(np.uint8)
 
-            # 用凸包完整度过滤：mask像素面积 / 凸包面积 < 70% 则剔除
+            # 边界接触过滤：mask触碰图像任意边缘则剔除（弧形cap本身是凸形，凸包比无法检测此类截断）
+            if (np.any(mask[0, :] > 0) or np.any(mask[-1, :] > 0) or
+                    np.any(mask[:, 0] > 0) or np.any(mask[:, -1] > 0)):
+                skipped_incomplete += 1
+                continue
+
+            # 凸包完整度过滤：mask实际像素数 / 凸包面积 < 70% 则剔除
             contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             if not contours:
                 skipped_incomplete += 1
@@ -145,27 +152,32 @@ class CellAppCP3:
                 M = cv2.moments(mask)
                 if M["m00"] > 0:
                     cx, cy = int(M["m10"]/M["m00"]), int(M["m01"]/M["m00"])
+                    _, er = cv2.minEnclosingCircle(contours[0])
                     cell_list.append({
                         "brightness": peak_brightness,
                         "pos": (cx, cy),
-                        "mask": mask
+                        "radius": int(er),
+                        "contours": contours
                     })
 
-        print(f"检测总数: {total_detected}  过滤掉(完整度<70%): {skipped_incomplete}  有效细胞: {len(cell_list)}")
+        print(f"过滤前细胞数: {total_detected}  过滤后细胞数: {len(cell_list)}  (过滤掉: {skipped_incomplete})")
 
-        # 按峰值亮度排序，只标注最亮的一个
+        # 按峰值亮度排序
         cell_list.sort(key=lambda x: x['brightness'], reverse=True)
 
         if cell_list:
+            # 普通细胞（除最亮）：黄色圆圈描边，无中心点
+            for cell in cell_list[1:]:
+                cv2.circle(res_img, cell['pos'], cell['radius'], (0, 255, 255), 2)  # BGR yellow
+
+            # 最亮细胞：绿色圆圈描边 + 绿色中心点 + 绿色坐标
             top = cell_list[0]
             cx, cy = top['pos']
             brightness_val = int(top['brightness'])
-
-            contours, _ = cv2.findContours(top['mask'], cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            cv2.drawContours(res_img, contours, -1, (0, 0, 255), 2)
-            cv2.circle(res_img, (cx, cy), 5, (0, 0, 255), -1)
+            cv2.circle(res_img, (cx, cy), top['radius'], (0, 255, 0), 2)   # green outline
+            cv2.circle(res_img, (cx, cy), 5, (0, 255, 0), -1)              # green center dot
             cv2.putText(res_img, f"({cx}, {cy})", (cx + 8, cy - 8),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)    # green coords
 
             status_msg = f"✅ 完成  最亮细胞: 坐标({cx}, {cy})  亮度={brightness_val}"
             print(f"最亮细胞坐标: ({cx}, {cy})  亮度值: {brightness_val}")
