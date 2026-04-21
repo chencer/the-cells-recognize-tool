@@ -84,6 +84,9 @@ class CellAppCP3:
         self._result_queue = queue.Queue()
         self._model_queue  = queue.Queue()
 
+        self.result_img       = None   # annotated result image
+        self._showing_result  = True   # toggle state
+
         self._setup_window()
         self.setup_ui()
         # Defer model loading until after UI is visible
@@ -334,6 +337,13 @@ class CellAppCP3:
             command=self.run_analysis, state='disabled')
         self.run_btn.pack(side='left')
 
+        # Toggle button — hidden until first analysis completes
+        self.toggle_btn = self._make_btn(
+            self._tb_frame, '  原图  ',
+            '#1c1c34', '#252048', TEXT_SEC,
+            command=self._toggle_view)
+        # not packed yet
+
     def _update_toolbar_pill(self):
         self._tb_frame.update_idletasks()
         fw = self._tb_frame.winfo_reqwidth()
@@ -419,6 +429,26 @@ class CellAppCP3:
         self.run_btn.bind('<Enter>', lambda e: self.run_btn.config(bg=ACCENT_GREEN2))
         self.run_btn.bind('<Leave>', lambda e: self.run_btn.config(bg=ACCENT_GREEN))
         self.root.after(10, self._update_toolbar_pill)
+
+    def _show_toggle_btn(self):
+        self._showing_result = True
+        self.toggle_btn.config(text='  原图  ')
+        self.toggle_btn.pack(side='left', padx=(4, 0))
+        self.root.after(10, self._update_toolbar_pill)
+
+    def _hide_toggle_btn(self):
+        self.toggle_btn.pack_forget()
+        self.root.after(10, self._update_toolbar_pill)
+
+    def _toggle_view(self):
+        if self._showing_result:
+            self.display_image(self.raw_image)
+            self.toggle_btn.config(text='  结果  ')
+            self._showing_result = False
+        else:
+            self.display_image(self.result_img)
+            self.toggle_btn.config(text='  原图  ')
+            self._showing_result = True
 
     # ── Animation: scan sweep (removed) ──────────────────────────────────────
     def _start_scan(self): pass
@@ -512,6 +542,8 @@ class CellAppCP3:
     def run_analysis(self):
         if self.raw_image is None:
             return
+        self._hide_toggle_btn()
+        self.result_img = None
         self.import_btn.config(state='disabled')
         self.run_btn.config(state='disabled')
         self._set_status('正在分析中...', ACCENT_YELLOW, ACCENT_YELLOW)
@@ -669,6 +701,8 @@ class CellAppCP3:
                     "brightness": peak,
                     "pos": (cx, cy),
                     "contours": c["contours"],
+                    "mask": c["mask"],   # needed for ring overlay
+                    "er": c["er"],       # needed for ring overlay
                 })
 
         print(f"过滤前细胞数: {total_detected}  最终有效细胞: {len(cell_list)}")
@@ -681,6 +715,18 @@ class CellAppCP3:
             # Yellow contours for non-top-3
             for cell in others:
                 cv2.drawContours(res_img, cell["contours"], -1, (0, 255, 255), 2)
+
+            # Ring overlay for top-3: darken outer 20% annulus (alpha=0.4 darkening)
+            for cell in top3:
+                cx, cy = cell["pos"]
+                er_int  = max(1, int(cell["er"]))
+                ir_int  = max(1, int(cell["er"] * 0.8))
+                outer_m = np.zeros((H_img, W_img), dtype=np.uint8)
+                inner_m = np.zeros((H_img, W_img), dtype=np.uint8)
+                cv2.circle(outer_m, (cx, cy), er_int, 1, -1)
+                cv2.circle(inner_m, (cx, cy), ir_int, 1, -1)
+                ring = (outer_m > 0) & (inner_m == 0) & (cell["mask"] > 0)
+                res_img[ring] = (res_img[ring] * 0.6).astype(np.uint8)
 
             # Green contour + center dot + rank number for top 3
             for rank, cell in enumerate(top3, start=1):
@@ -699,7 +745,9 @@ class CellAppCP3:
         else:
             self._set_status('完成（无有效细胞）', TEXT_SEC, TEXT_DIM)
 
+        self.result_img = res_img
         self.display_image(res_img)
+        self._show_toggle_btn()
 
     # ── Display ───────────────────────────────────────────────────────────────
     def display_image(self, img):
