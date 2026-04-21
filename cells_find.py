@@ -9,6 +9,8 @@ from cellpose import models
 import sys
 import ssl
 import math
+import threading
+import queue
 
 try:
     import ttkbootstrap as ttk
@@ -69,9 +71,6 @@ class CellAppCP3:
         self._drag_oy = 0
 
         # Animation state
-        self._scan_running  = False
-        self._scan_x        = 0
-        self._scan_img_ref  = None
         self._pulse_running = False
         self._pulse_t       = 0.0
         self._spin_running  = False
@@ -81,6 +80,8 @@ class CellAppCP3:
         # Background gradient cache
         self._bg_size = (0, 0)
         self._bg_img  = None
+
+        self._result_queue = queue.Queue()
 
         self._setup_window()
         self.init_model()
@@ -110,6 +111,18 @@ class CellAppCP3:
             self.root.overrideredirect(True)
             self.root.unbind('<Map>')
         self.root.bind('<Map>', _restore)
+
+    def _toggle_maximize(self):
+        is_zoomed = getattr(self, '_maximized', False)
+        if is_zoomed:
+            self.root.geometry(self._pre_max_geo)
+            self._maximized = False
+        else:
+            self._pre_max_geo = self.root.geometry()
+            sw = self.root.winfo_screenwidth()
+            sh = self.root.winfo_screenheight()
+            self.root.geometry(f"{sw}x{sh}+0+0")
+            self._maximized = True
 
     # ── Model ─────────────────────────────────────────────────────────────────
     def init_model(self):
@@ -147,42 +160,40 @@ class CellAppCP3:
         self.root.after(80, self._update_toolbar_pill)
         self.root.after(80, self._update_status_pill)
 
-    # ── Title bar (macOS style) ───────────────────────────────────────────────
+    # ── Title bar (Windows style) ─────────────────────────────────────────────
     def _build_titlebar(self):
-        bar = tk.Frame(self.root, height=36, bg=BG_TITLEBAR)
+        bar = tk.Frame(self.root, height=32, bg=BG_TITLEBAR)
         bar.pack(fill='x', side='top')
         bar.pack_propagate(False)
 
-        # Colored dots
-        dot_row = tk.Frame(bar, bg=BG_TITLEBAR)
-        dot_row.place(x=14, rely=0.5, anchor='w')
-
-        def _dot(color, cmd=None):
-            d = tk.Canvas(dot_row, width=12, height=12,
-                          bg=BG_TITLEBAR, highlightthickness=0)
-            d.pack(side='left', padx=4)
-            d.create_oval(1, 1, 11, 11, fill=color, outline='')
-            if cmd:
-                d.bind('<Button-1>', lambda e: cmd())
-            return d
-
-        _dot('#ff5f56', self.root.destroy)
-        _dot('#ffbd2e', self._minimize)
-        _dot('#27c93f')  # maximize noop
-
-        # Centered title
+        # Left: app title
         tk.Label(bar, text='CellAppCP3 — Cellpose v3.0',
                  bg=BG_TITLEBAR, fg=TEXT_SEC,
-                 font=MONO_FONT).place(relx=0.5, rely=0.5, anchor='center')
+                 font=MONO_FONT).place(x=12, rely=0.5, anchor='w')
+
+        # Right: ─  □  ✕
+        def _winbtn(parent, text, hover, cmd):
+            b = tk.Label(parent, text=text, bg=BG_TITLEBAR, fg=TEXT_SEC,
+                         font=('Arial', 11), width=3, cursor='hand2')
+            b.pack(side='left')
+            b.bind('<Enter>',    lambda e: b.config(bg=hover))
+            b.bind('<Leave>',    lambda e: b.config(bg=BG_TITLEBAR))
+            b.bind('<Button-1>', lambda e: cmd())
+            return b
+
+        btn_row = tk.Frame(bar, bg=BG_TITLEBAR)
+        btn_row.place(relx=1.0, rely=0.5, anchor='e')
+
+        _winbtn(btn_row, '─', '#2a2a3e', self._minimize)
+        _winbtn(btn_row, '□', '#2a2a3e', self._toggle_maximize)
+        _winbtn(btn_row, '✕', '#c42b1c', self.root.destroy)
 
         # Separator
         tk.Frame(self.root, bg=BORDER, height=1).pack(fill='x', side='top')
 
-        # Drag
+        # Drag (exclude button area)
         bar.bind('<ButtonPress-1>', self._start_drag)
         bar.bind('<B1-Motion>',     self._do_drag)
-        dot_row.bind('<ButtonPress-1>', self._start_drag)
-        dot_row.bind('<B1-Motion>',     self._do_drag)
 
     # ── Main area ─────────────────────────────────────────────────────────────
     def _build_main_area(self):
@@ -373,40 +384,9 @@ class CellAppCP3:
         self.run_btn.bind('<Leave>', lambda e: self.run_btn.config(bg=ACCENT_GREEN))
         self.root.after(10, self._update_toolbar_pill)
 
-    # ── Animation: scan sweep ─────────────────────────────────────────────────
-    def _start_scan(self):
-        self._scan_running = True
-        self._scan_x = -160
-        ch = max(self.canvas.winfo_height(), 2)
-        ws = 160
-
-        arr = np.zeros((ch, ws, 4), dtype=np.uint8)
-        for x in range(ws):
-            t = math.sin(math.pi * x / ws)
-            arr[:, x, 0] = int(123 * t)
-            arr[:, x, 1] = int(47  * t)
-            arr[:, x, 2] = int(190 * t)
-            arr[:, x, 3] = int(160 * t)
-
-        self._scan_img_ref = ImageTk.PhotoImage(
-            Image.fromarray(arr, 'RGBA'))
-        self.canvas.create_image(
-            self._scan_x, 0, image=self._scan_img_ref,
-            anchor='nw', tags='scan_anim')
-        self._tick_scan()
-
-    def _tick_scan(self):
-        if not self._scan_running:
-            return
-        self._scan_x += 12
-        if self._scan_x > self.canvas.winfo_width():
-            self._scan_x = -160
-        self.canvas.coords('scan_anim', self._scan_x, 0)
-        self.root.after(28, self._tick_scan)
-
-    def _stop_scan(self):
-        self._scan_running = False
-        self.canvas.delete('scan_anim')
+    # ── Animation: scan sweep (removed) ──────────────────────────────────────
+    def _start_scan(self): pass
+    def _stop_scan(self):  pass
 
     # ── Animation: pulse dot ──────────────────────────────────────────────────
     def _start_pulse(self):
@@ -501,13 +481,25 @@ class CellAppCP3:
     def run_analysis(self):
         if self.raw_image is None:
             return
+        self.import_btn.config(state='disabled')
+        self.run_btn.config(state='disabled')
         self._set_status('正在分析中...', ACCENT_YELLOW, ACCENT_YELLOW)
         self._start_scan()
         self._start_pulse()
         self._build_spinner_card()
-        self.root.update()
+        # Clear any stale result from a previous run
+        while not self._result_queue.empty():
+            try:
+                self._result_queue.get_nowait()
+            except queue.Empty:
+                break
+        t = threading.Thread(target=self._analysis_worker, daemon=True)
+        t.start()
+        self._check_result()
+
+    def _analysis_worker(self):
         try:
-            masks, flows, styles = self.model.eval(
+            masks = self.model.eval(
                 self.raw_image,
                 diameter=120,
                 channels=[0, 0],
@@ -515,16 +507,26 @@ class CellAppCP3:
                 cellprob_threshold=1.0,
                 min_size=200,
                 resample=True,
-            )[:3]
-            self._stop_scan()
-            self._stop_pulse()
-            self._destroy_spinner_card()
-            self.render_results(masks)
+            )[0]
+            self._result_queue.put(('ok', masks))
         except Exception as e:
-            self._stop_scan()
-            self._stop_pulse()
-            self._destroy_spinner_card()
-            messagebox.showerror("识别失败", f"{e}")
+            self._result_queue.put(('err', e))
+
+    def _check_result(self):
+        try:
+            status, payload = self._result_queue.get_nowait()
+        except queue.Empty:
+            self.root.after(100, self._check_result)
+            return
+        self._stop_scan()
+        self._stop_pulse()
+        self._destroy_spinner_card()
+        self.import_btn.config(state='normal')
+        self._enable_run_btn()
+        if status == 'ok':
+            self.render_results(payload)
+        else:
+            messagebox.showerror("识别失败", f"{payload}")
 
     # ── Render ────────────────────────────────────────────────────────────────
     def render_results(self, masks):
@@ -570,6 +572,7 @@ class CellAppCP3:
             candidates.append({
                 "cid": cid, "mask": mask, "mask_area": mask_area,
                 "contours": contours, "perimeter": perimeter,
+                "er": er,  # reused in brightness ROI — avoids recomputing minEnclosingCircle
             })
         print(f"[Step1] 完整度过滤后: {len(candidates)} / {total_detected}")
 
@@ -604,38 +607,63 @@ class CellAppCP3:
 
         # ── Brightness ────────────────────────────────────────────────────────
         cell_list = []
+        H_img, W_img = gray.shape
         for c in candidates:
-            cell_pixels = gray[c["mask"] > 0]
+            M = cv2.moments(c["mask"])
+            if M["m00"] <= 0:
+                continue
+            cx = int(M["m10"] / M["m00"])
+            cy = int(M["m01"] / M["m00"])
+
+            # Reuse er stored in step 1 — no extra minEnclosingCircle call
+            ir = max(1, int(c["er"] * 0.8))
+
+            # ROI clipped to image bounds
+            rx1 = max(0, cx - ir);  ry1 = max(0, cy - ir)
+            rx2 = min(W_img, cx + ir + 1);  ry2 = min(H_img, cy + ir + 1)
+
+            # Inner circle mask at ROI size — far smaller than full H×W allocation
+            roi_h, roi_w = ry2 - ry1, rx2 - rx1
+            inner_mask = np.zeros((roi_h, roi_w), dtype=np.uint8)
+            cv2.circle(inner_mask, (cx - rx1, cy - ry1), ir, 1, -1)
+
+            sample_mask = (inner_mask > 0) & (c["mask"][ry1:ry2, rx1:rx2] > 0)
+            cell_pixels = gray[ry1:ry2, rx1:rx2][sample_mask]
+
             if len(cell_pixels) > 50:
-                sorted_px = np.sort(cell_pixels)[::-1]
-                top5  = max(1, int(len(sorted_px) * 0.05))
-                peak  = float(np.mean(sorted_px[:top5]))
-                M = cv2.moments(c["mask"])
-                if M["m00"] > 0:
-                    cx = int(M["m10"] / M["m00"])
-                    cy = int(M["m01"] / M["m00"])
-                    cell_list.append({
-                        "brightness": peak,
-                        "pos": (cx, cy),
-                        "contours": c["contours"],
-                    })
+                k = max(1, int(len(cell_pixels) * 0.05))
+                # np.partition is O(n); np.sort would be O(n log n)
+                peak = float(np.mean(np.partition(cell_pixels, -k)[-k:]))
+                cell_list.append({
+                    "brightness": peak,
+                    "pos": (cx, cy),
+                    "contours": c["contours"],
+                })
 
         print(f"过滤前细胞数: {total_detected}  最终有效细胞: {len(cell_list)}")
         cell_list.sort(key=lambda x: x["brightness"], reverse=True)
 
         if cell_list:
-            for cell in cell_list[1:]:
+            top3   = cell_list[:3]
+            others = cell_list[3:]
+
+            # Yellow contours for non-top-3
+            for cell in others:
                 cv2.drawContours(res_img, cell["contours"], -1, (0, 255, 255), 2)
-            top = cell_list[0]
-            cx, cy = top["pos"]
-            bv = int(top["brightness"])
-            cv2.drawContours(res_img, top["contours"], -1, (0, 255, 0), 2)
-            cv2.circle(res_img, (cx, cy), 5, (0, 255, 0), -1)
-            cv2.putText(res_img, f"({cx}, {cy})", (cx + 8, cy - 8),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-            print(f"最亮细胞坐标: ({cx}, {cy})  亮度值: {bv}")
+
+            # Green contour + center dot + rank number for top 3
+            for rank, cell in enumerate(top3, start=1):
+                cx, cy = cell["pos"]
+                cv2.drawContours(res_img, cell["contours"], -1, (0, 255, 0), 2)
+                cv2.circle(res_img, (cx, cy), 5, (0, 255, 0), -1)
+                cv2.putText(res_img, str(rank), (cx + 8, cy - 8),
+                            cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
+                print(f"  #{rank}  坐标=({cx}, {cy})  亮度={int(cell['brightness'])}")
+
+            top1 = top3[0]
+            cx1, cy1 = top1["pos"]
             self._set_status(
-                f'完成 · ({cx}, {cy})  亮度={bv}',
+                f'完成 · #1 ({cx1}, {cy1})  亮度={int(top1["brightness"])}',
                 ACCENT_GREEN, ACCENT_GREEN)
         else:
             self._set_status('完成（无有效细胞）', TEXT_SEC, TEXT_DIM)
