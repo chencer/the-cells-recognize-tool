@@ -82,10 +82,12 @@ class CellAppCP3:
         self._bg_img  = None
 
         self._result_queue = queue.Queue()
+        self._model_queue  = queue.Queue()
 
         self._setup_window()
-        self.init_model()
         self.setup_ui()
+        # Defer model loading until after UI is visible
+        self.root.after(120, self._start_model_load)
 
     # ── Window ────────────────────────────────────────────────────────────────
     def _setup_window(self):
@@ -124,33 +126,67 @@ class CellAppCP3:
             self.root.geometry(f"{sw}x{sh}+0+0")
             self._maximized = True
 
-    # ── Model ─────────────────────────────────────────────────────────────────
-    def init_model(self):
-        import torch
-        from cellpose import models
-        import ssl
+    # ── Model loading ─────────────────────────────────────────────────────────
+    def _start_model_load(self):
+        self._set_status('正在加载模型...', ACCENT_YELLOW, ACCENT_YELLOW)
+        self._start_pulse()
+        self._build_spinner_card(
+            text='正在加载 Cellpose v3.0 模型',
+            subtext='首次启动需要几秒，请稍候')
+        t = threading.Thread(target=self._load_model_worker, daemon=True)
+        t.start()
+        self._check_model_result()
 
-        torch.serialization.add_safe_globals([models.CellposeModel])
-        import torch.serialization
-        torch.load = lambda *a, **kw: torch.serialization.load(
-            *a, **kw, weights_only=False)
-
-        ssl._create_default_https_context = ssl._create_unverified_context
-        print("正在定位模型文件...")
-        use_gpu = torch.backends.mps.is_available() or torch.cuda.is_available()
-
+    def _load_model_worker(self):
         try:
+            import torch
+            from cellpose import models as cp_models
+            import ssl as _ssl
+
+            torch.serialization.add_safe_globals([cp_models.CellposeModel])
+            import torch.serialization
+            torch.load = lambda *a, **kw: torch.serialization.load(
+                *a, **kw, weights_only=False)
+
+            _ssl._create_default_https_context = _ssl._create_unverified_context
+            print("正在定位模型文件...")
+            use_gpu = torch.backends.mps.is_available() or torch.cuda.is_available()
+
             model_path = get_resource_path("cyto3")
             if os.path.exists(model_path):
-                self.model = models.CellposeModel(
-                    gpu=use_gpu, pretrained_model=model_path)
+                m = cp_models.CellposeModel(gpu=use_gpu, pretrained_model=model_path)
                 print(f"✅ 成功加载本地模型: {model_path}")
             else:
-                self.model = models.Cellpose(gpu=use_gpu, model_type="cyto3")
+                m = cp_models.Cellpose(gpu=use_gpu, model_type="cyto3")
                 print("✅ 使用系统默认路径加载 cyto3")
+
+            self._model_queue.put(('ok', m))
         except Exception as e:
             print(f"❌ 初始化失败: {e}")
-            messagebox.showerror("初始化失败", f"错误详情: {e}")
+            self._model_queue.put(('err', e))
+
+    def _check_model_result(self):
+        try:
+            status, payload = self._model_queue.get_nowait()
+        except queue.Empty:
+            self.root.after(100, self._check_model_result)
+            return
+        self._stop_pulse()
+        self._destroy_spinner_card()
+        if status == 'ok':
+            self.model = payload
+            self._set_status('准备就绪', TEXT_SEC, TEXT_DIM)
+            self.import_btn.config(
+                state='normal', bg=ACCENT_PUR, fg='white',
+                activebackground=ACCENT_PUR_H, cursor='hand2')
+            self.import_btn.bind('<Enter>',
+                lambda e: self.import_btn.config(bg=ACCENT_PUR_H))
+            self.import_btn.bind('<Leave>',
+                lambda e: self.import_btn.config(bg=ACCENT_PUR))
+            self.root.after(10, self._update_toolbar_pill)
+        else:
+            self._set_status('模型加载失败', '#ff5555', '#ff5555')
+            messagebox.showerror("初始化失败", f"错误详情: {payload}")
 
     # ── UI ────────────────────────────────────────────────────────────────────
     def setup_ui(self):
@@ -288,8 +324,8 @@ class CellAppCP3:
 
         self.import_btn = self._make_btn(
             self._tb_frame, '  导入图片  ',
-            ACCENT_PUR, ACCENT_PUR_H, 'white',
-            command=self.load_image)
+            '#252040', '#252040', TEXT_DIM,
+            command=self.load_image, state='disabled')
         self.import_btn.pack(side='left', padx=(0, 4))
 
         self.run_btn = self._make_btn(
@@ -410,13 +446,12 @@ class CellAppCP3:
         self._pulse_running = False
 
     # ── Animation: spinner card ───────────────────────────────────────────────
-    def _build_spinner_card(self):
-        cw = max(self.canvas.winfo_width(),  1100)
-        ch = max(self.canvas.winfo_height(), 714)
+    def _build_spinner_card(self, text='Cellpose v3.0 分析中',
+                            subtext='model: cyto3'):
         cw = self.canvas.winfo_width()  or 1100
         ch = self.canvas.winfo_height() or 714
 
-        card_w, card_h = 252, 64
+        card_w, card_h = 300, 64
         self._spin_cv = tk.Canvas(
             self.main_frame,
             width=card_w, height=card_h,
@@ -428,7 +463,6 @@ class CellAppCP3:
         _smooth_pill(self._spin_cv, 0, 0, card_w-1, card_h-1, r=8,
                      fill='#0D0D1A', outline=BORDER)
 
-        # Spinner track + arc
         sx, sy, sr = 32, 32, 14
         self._spin_cv.create_oval(
             sx-sr, sy-sr, sx+sr, sy+sr,
@@ -438,14 +472,11 @@ class CellAppCP3:
             start=0, extent=70, outline=ACCENT_PUR,
             width=3, style='arc', tags='sp_arc')
 
-        # Labels
         self._spin_cv.create_text(
-            56, 26, anchor='w',
-            text='Cellpose v3.0 分析中',
+            56, 26, anchor='w', text=text,
             fill=TEXT_PRI, font=('Arial', 10, 'bold'))
         self._spin_cv.create_text(
-            57, 44, anchor='w',
-            text='model: cyto3',
+            57, 44, anchor='w', text=subtext,
             fill=TEXT_DIM, font=MONO_FONT)
 
         self._spin_running = True
