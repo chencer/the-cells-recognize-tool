@@ -150,8 +150,8 @@ class CellAppCP3:
                   f"  circle_comp={circle_comp:.3f}  touches={'Y' if touches else 'N'}"
                   f"  → using {method}={completeness:.3f}")
 
-            if completeness < 0.7:
-                print(f"  [skip-completeness] cell {cid}: {method}_comp={completeness:.3f} < 0.70")
+            if completeness < 0.85:
+                print(f"  [skip-completeness] cell {cid}: {method}_comp={completeness:.3f} < 0.85")
                 continue
 
             perimeter = cv2.arcLength(contours[0], True)
