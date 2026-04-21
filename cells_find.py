@@ -8,6 +8,7 @@ from PIL import Image, ImageTk
 from cellpose import models
 import sys
 import ssl
+import math
 
 try:
     import ttkbootstrap as ttk
@@ -15,21 +16,18 @@ except ImportError:
     ttk = None
 
 # ── Design tokens ─────────────────────────────────────────────────────────────
-BG_PRIMARY   = '#0A0A14'
-BG_SECONDARY = '#12121F'
-BG_PANEL     = '#16162A'
-BG_CANVAS    = '#080810'
-ACCENT_PUR   = '#7B2FBE'
-ACCENT_GREEN = '#00E676'
-TEXT_PRI     = '#E8E8F0'
-TEXT_SEC     = '#7A7A9E'
-TEXT_DIM     = '#4A4A6A'
-BORDER       = '#1E1E38'
-BORDER_ACT   = '#2E2E50'
-GREEN_BTN    = '#1B6B3A'
-GREEN_HOV    = '#28a745'
-ORANGE       = '#FFA040'
-TOOLBAR_BG   = '#10101E'
+BG_WIN        = '#0D0D1A'
+BG_TITLEBAR   = '#1a1a2e'
+TOOLBAR_BG    = '#0F0F1C'
+BORDER        = '#2A2A40'
+ACCENT_PUR    = '#7B2FBE'
+ACCENT_PUR_H  = '#8c3cd3'
+ACCENT_GREEN  = '#00E676'
+ACCENT_GREEN2 = '#00c766'
+ACCENT_YELLOW = '#FFD600'
+TEXT_PRI      = '#E0E0E0'
+TEXT_SEC      = '#9E9E9E'
+TEXT_DIM      = '#5a5a6a'
 
 if sys.platform == 'win32':
     UI_FONT   = ('Microsoft YaHei', 9, 'bold')
@@ -45,6 +43,23 @@ def get_resource_path(relative_path):
     return os.path.join(os.path.abspath("."), relative_path)
 
 
+def _smooth_pill(canvas, x1, y1, x2, y2, r, fill, outline, tag=''):
+    """Smooth rounded rectangle using polygon smooth=True."""
+    r = min(r, (x2 - x1) // 2, (y2 - y1) // 2)
+    pts = [
+        x1+r, y1,   x2-r, y1,
+        x2,   y1,   x2,   y1+r,
+        x2,   y2-r, x2,   y2,
+        x2-r, y2,   x1+r, y2,
+        x1,   y2,   x1,   y2-r,
+        x1,   y1+r, x1,   y1,
+    ]
+    kw = {'smooth': True, 'fill': fill, 'outline': outline}
+    if tag:
+        kw['tags'] = tag
+    canvas.create_polygon(pts, **kw)
+
+
 class CellAppCP3:
     def __init__(self, root):
         self.root = root
@@ -53,6 +68,20 @@ class CellAppCP3:
         self._drag_ox = 0
         self._drag_oy = 0
 
+        # Animation state
+        self._scan_running  = False
+        self._scan_x        = 0
+        self._scan_img_ref  = None
+        self._pulse_running = False
+        self._pulse_t       = 0.0
+        self._spin_running  = False
+        self._spin_angle    = 0
+        self._spin_after_id = None
+
+        # Background gradient cache
+        self._bg_size = (0, 0)
+        self._bg_img  = None
+
         self._setup_window()
         self.init_model()
         self.setup_ui()
@@ -60,7 +89,7 @@ class CellAppCP3:
     # ── Window ────────────────────────────────────────────────────────────────
     def _setup_window(self):
         self.root.overrideredirect(True)
-        self.root.configure(bg=BG_PRIMARY)
+        self.root.configure(bg=BG_WIN)
         self.root.update_idletasks()
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
@@ -71,7 +100,8 @@ class CellAppCP3:
         self._drag_oy = event.y_root - self.root.winfo_y()
 
     def _do_drag(self, event):
-        self.root.geometry(f"+{event.x_root - self._drag_ox}+{event.y_root - self._drag_oy}")
+        self.root.geometry(
+            f"+{event.x_root - self._drag_ox}+{event.y_root - self._drag_oy}")
 
     def _minimize(self, event=None):
         self.root.overrideredirect(False)
@@ -89,7 +119,8 @@ class CellAppCP3:
 
         torch.serialization.add_safe_globals([models.CellposeModel])
         import torch.serialization
-        torch.load = lambda *a, **kw: torch.serialization.load(*a, **kw, weights_only=False)
+        torch.load = lambda *a, **kw: torch.serialization.load(
+            *a, **kw, weights_only=False)
 
         ssl._create_default_https_context = ssl._create_unverified_context
         print("正在定位模型文件...")
@@ -98,7 +129,8 @@ class CellAppCP3:
         try:
             model_path = get_resource_path("cyto3")
             if os.path.exists(model_path):
-                self.model = models.CellposeModel(gpu=use_gpu, pretrained_model=model_path)
+                self.model = models.CellposeModel(
+                    gpu=use_gpu, pretrained_model=model_path)
                 print(f"✅ 成功加载本地模型: {model_path}")
             else:
                 self.model = models.Cellpose(gpu=use_gpu, model_type="cyto3")
@@ -111,154 +143,350 @@ class CellAppCP3:
     def setup_ui(self):
         self._build_titlebar()
         self._build_main_area()
+        # Defer pill sizing until window is drawn
+        self.root.after(80, self._update_toolbar_pill)
+        self.root.after(80, self._update_status_pill)
 
+    # ── Title bar (macOS style) ───────────────────────────────────────────────
     def _build_titlebar(self):
-        bar = tk.Frame(self.root, bg=BG_SECONDARY, height=32)
+        bar = tk.Frame(self.root, height=36, bg=BG_TITLEBAR)
         bar.pack(fill='x', side='top')
         bar.pack_propagate(False)
 
-        # Purple icon square
-        icon = tk.Canvas(bar, width=14, height=14,
-                         bg=BG_SECONDARY, highlightthickness=0)
-        icon.pack(side='left', padx=(12, 7), pady=9)
-        icon.create_rectangle(0, 0, 14, 14, fill=ACCENT_PUR, outline='')
+        # Colored dots
+        dot_row = tk.Frame(bar, bg=BG_TITLEBAR)
+        dot_row.place(x=14, rely=0.5, anchor='w')
 
-        tk.Label(bar, text='CellAppCP3 — Cellpose v3.0',
-                 bg=BG_SECONDARY, fg=TEXT_DIM,
-                 font=MONO_FONT).pack(side='left')
-
-        # Windows controls (right-aligned)
-        ctrl = tk.Frame(bar, bg=BG_SECONDARY)
-        ctrl.pack(side='right', fill='y')
-
-        def _wbtn(text, cmd, is_close=False):
-            b = tk.Label(ctrl, text=text, bg=BG_SECONDARY, fg=TEXT_DIM,
-                         font=('Arial', 10), width=4, height=1, cursor='hand2')
-            b.pack(side='left', fill='y')
+        def _dot(color, cmd=None):
+            d = tk.Canvas(dot_row, width=12, height=12,
+                          bg=BG_TITLEBAR, highlightthickness=0)
+            d.pack(side='left', padx=4)
+            d.create_oval(1, 1, 11, 11, fill=color, outline='')
             if cmd:
-                b.bind('<Button-1>', lambda e: cmd())
-            hbg = '#E81123' if is_close else '#2A2A3A'
-            hfg = 'white'   if is_close else TEXT_DIM
-            b.bind('<Enter>', lambda e: b.config(bg=hbg, fg=hfg))
-            b.bind('<Leave>', lambda e: b.config(bg=BG_SECONDARY, fg=TEXT_DIM))
+                d.bind('<Button-1>', lambda e: cmd())
+            return d
 
-        _wbtn('─', self._minimize)
-        _wbtn('□', None)
-        _wbtn('✕', self.root.destroy, is_close=True)
+        _dot('#ff5f56', self.root.destroy)
+        _dot('#ffbd2e', self._minimize)
+        _dot('#27c93f')  # maximize noop
 
-        # 1-px separator
+        # Centered title
+        tk.Label(bar, text='CellAppCP3 — Cellpose v3.0',
+                 bg=BG_TITLEBAR, fg=TEXT_SEC,
+                 font=MONO_FONT).place(relx=0.5, rely=0.5, anchor='center')
+
+        # Separator
         tk.Frame(self.root, bg=BORDER, height=1).pack(fill='x', side='top')
 
-        # Drag on title bar
+        # Drag
         bar.bind('<ButtonPress-1>', self._start_drag)
         bar.bind('<B1-Motion>',     self._do_drag)
-        icon.bind('<ButtonPress-1>', self._start_drag)
-        icon.bind('<B1-Motion>',     self._do_drag)
+        dot_row.bind('<ButtonPress-1>', self._start_drag)
+        dot_row.bind('<B1-Motion>',     self._do_drag)
 
+    # ── Main area ─────────────────────────────────────────────────────────────
     def _build_main_area(self):
-        self.main_frame = tk.Frame(self.root, bg=BG_CANVAS)
+        self.main_frame = tk.Frame(self.root, bg=BG_WIN)
         self.main_frame.pack(fill='both', expand=True)
 
-        self.canvas = tk.Canvas(self.main_frame, bg=BG_CANVAS, highlightthickness=0)
+        self.canvas = tk.Canvas(self.main_frame, bg=BG_WIN,
+                                highlightthickness=0)
         self.canvas.pack(fill='both', expand=True)
-        self.canvas.bind('<Configure>', self._on_canvas_resize)
+        self.canvas.bind('<Configure>', self._on_canvas_configure)
 
         self._build_floating_toolbar()
+        self._build_status_pill()
 
-    def _on_canvas_resize(self, event):
+    def _on_canvas_configure(self, event):
+        self._update_bg_gradient()
         if self.raw_image is None:
             self._draw_empty_state()
 
+    # ── Background gradient ───────────────────────────────────────────────────
+    def _update_bg_gradient(self):
+        w = self.canvas.winfo_width()
+        h = self.canvas.winfo_height()
+        if w < 2 or h < 2 or (w, h) == self._bg_size:
+            return
+        self._bg_size = (w, h)
+
+        cx, cy = w / 2, h / 2
+        yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+        dist = np.clip(
+            np.sqrt((xx - cx)**2 + (yy - cy)**2) / (max(w, h) * 0.75),
+            0, 1)
+
+        r = (0x15 * (1 - dist) + 0x0a * dist).astype(np.uint8)
+        g = (0x20 * (1 - dist) + 0x0f * dist).astype(np.uint8)
+        b = (0x1a * (1 - dist) + 0x0c * dist).astype(np.uint8)
+
+        self._bg_img = ImageTk.PhotoImage(
+            Image.fromarray(np.stack([r, g, b], axis=-1), 'RGB'))
+        self.canvas.delete('bg_gradient')
+        self.canvas.create_image(0, 0, image=self._bg_img, anchor='nw',
+                                 tags='bg_gradient')
+        self.canvas.tag_lower('bg_gradient')
+
+    # ── Empty state ───────────────────────────────────────────────────────────
     def _draw_empty_state(self):
         self.canvas.delete('empty_state')
         self.canvas.update_idletasks()
-        cx = max(self.canvas.winfo_width() // 2, 2)
-        cy = max(self.canvas.winfo_height() // 2, 2)
-        s = 24
+        w = self.canvas.winfo_width()
+        h = self.canvas.winfo_height()
+        if w < 4:
+            return
+        cx, cy = w // 2, h // 2
+        bw, bh = 400, 220
+
+        # Dashed border
         self.canvas.create_rectangle(
-            cx-s, cy-s, cx+s, cy+s,
-            outline=BORDER_ACT, dash=(4, 4), width=2, tags='empty_state')
-        self.canvas.create_text(
-            cx, cy, text='+', fill=TEXT_DIM,
-            font=('Arial', 18, 'bold'), tags='empty_state')
-        self.canvas.create_text(
-            cx, cy+52, text='导入荧光细胞图片开始分析',
-            fill=TEXT_DIM, font=('Arial', 10), tags='empty_state')
+            cx - bw//2, cy - bh//2, cx + bw//2, cy + bh//2,
+            outline=BORDER, dash=(6, 4), width=2, fill='',
+            tags='empty_state')
 
+        # Image icon (camera silhouette)
+        ix, iy = cx, cy - 28
+        self.canvas.create_rectangle(
+            ix-22, iy-14, ix+22, iy+14,
+            outline=TEXT_DIM, width=1, fill='', tags='empty_state')
+        self.canvas.create_oval(
+            ix-7, iy-7, ix+7, iy+7,
+            outline=TEXT_DIM, width=1, fill='', tags='empty_state')
+        self.canvas.create_rectangle(
+            ix-10, iy-19, ix-3, iy-14,
+            outline=TEXT_DIM, width=1, fill='', tags='empty_state')
+        self.canvas.create_line(
+            ix-22, iy+4, ix-10, iy-6, fill=TEXT_DIM, width=1,
+            tags='empty_state')
+
+        self.canvas.create_text(
+            cx, cy + 14, text='点击 "1. 导入图片" 开始',
+            fill=TEXT_DIM, font=('Arial', 12), tags='empty_state')
+        self.canvas.create_text(
+            cx, cy + 38, text='.tif · .tiff · .png · 2048 × 1080',
+            fill='#3e3e4a', font=MONO_FONT, tags='empty_state')
+
+    # ── Floating toolbar pill (top-left) ──────────────────────────────────────
     def _build_floating_toolbar(self):
-        # Outer frame acts as 1-px border
-        outer = tk.Frame(self.main_frame, bg=BORDER_ACT)
-        outer.place(relx=0.5, rely=1.0, anchor='s', y=-14)
+        self._tb_pill = tk.Canvas(self.main_frame, bg=BG_WIN,
+                                  highlightthickness=0)
+        self._tb_pill.place(x=16, y=16)
 
-        inner = tk.Frame(outer, bg=TOOLBAR_BG)
-        inner.pack(padx=1, pady=1)
+        self._tb_frame = tk.Frame(self._tb_pill, bg=TOOLBAR_BG,
+                                  padx=6, pady=6)
 
-        pad = tk.Frame(inner, bg=TOOLBAR_BG, padx=20, pady=8)
-        pad.pack()
+        self.import_btn = self._make_btn(
+            self._tb_frame, '  导入图片  ',
+            ACCENT_PUR, ACCENT_PUR_H, 'white',
+            command=self.load_image)
+        self.import_btn.pack(side='left', padx=(0, 4))
 
-        # ── Import button ──────────────────────────────────────────────────
-        self.import_btn = tk.Button(
-            pad, text='导入图片',
-            bg=BG_PANEL, fg=TEXT_PRI,
-            activebackground='#252540', activeforeground=TEXT_PRI,
-            font=UI_FONT, relief='flat', bd=0,
-            padx=16, pady=6, cursor='hand2',
-            command=self.load_image,
-        )
-        self.import_btn.pack(side='left', padx=(0, 6))
-        self._hover(self.import_btn, BG_PANEL, '#252540')
-
-        # ── Run button (disabled initially) ───────────────────────────────
-        self.run_btn = tk.Button(
-            pad, text='细胞识别',
-            bg='#1A1A2E', fg=TEXT_DIM,
-            activebackground='#1A1A2E', activeforeground=TEXT_DIM,
-            font=UI_FONT, relief='flat', bd=0,
-            padx=16, pady=6, cursor='arrow',
-            state='disabled', disabledforeground=TEXT_DIM,
-            command=self.run_analysis,
-        )
+        self.run_btn = self._make_btn(
+            self._tb_frame, '  细胞识别  ',
+            '#252040', '#252040', TEXT_DIM,
+            command=self.run_analysis, state='disabled')
         self.run_btn.pack(side='left')
 
-        # ── Divider ────────────────────────────────────────────────────────
-        tk.Frame(pad, bg=BORDER_ACT, width=1, height=22).pack(side='left', padx=12)
+    def _update_toolbar_pill(self):
+        self._tb_frame.update_idletasks()
+        fw = self._tb_frame.winfo_reqwidth()
+        fh = self._tb_frame.winfo_reqheight()
+        pad = 3
+        pw, ph = fw + 2*pad, fh + 2*pad
 
-        # ── Status ─────────────────────────────────────────────────────────
-        sf = tk.Frame(pad, bg=TOOLBAR_BG)
-        sf.pack(side='left')
+        self._tb_pill.config(width=pw, height=ph)
+        self._tb_pill.delete('all')
+        _smooth_pill(self._tb_pill, 0, 0, pw-1, ph-1, r=10,
+                     fill=TOOLBAR_BG, outline=BORDER)
+        self._tb_pill.create_window(
+            pw // 2, ph // 2, window=self._tb_frame, anchor='center')
 
-        self._dot = tk.Canvas(sf, width=7, height=7,
+    # ── Status pill (bottom center) ───────────────────────────────────────────
+    def _build_status_pill(self):
+        self._sb_pill = tk.Canvas(self.main_frame, bg=BG_WIN,
+                                  highlightthickness=0)
+        self._sb_pill.place(relx=0.5, rely=1.0, anchor='s', y=-20)
+
+        self._sb_frame = tk.Frame(self._sb_pill, bg=TOOLBAR_BG,
+                                  padx=14, pady=7)
+
+        self._dot = tk.Canvas(self._sb_frame, width=7, height=7,
                               bg=TOOLBAR_BG, highlightthickness=0)
-        self._dot.pack(side='left', padx=(0, 6), pady=1)
-        self._dot_draw(ACCENT_PUR)
+        self._dot.pack(side='left', padx=(0, 8))
+        self._dot_draw(TEXT_DIM)
 
         self.status_label = tk.Label(
-            sf, text='准备就绪',
-            bg=TOOLBAR_BG, fg=TEXT_SEC,
-            font=MONO_FONT,
-        )
+            self._sb_frame, text='准备就绪',
+            bg=TOOLBAR_BG, fg=TEXT_SEC, font=MONO_FONT)
         self.status_label.pack(side='left')
 
-    def _hover(self, widget, normal_bg, hover_bg):
-        widget.bind('<Enter>', lambda e: widget.config(bg=hover_bg))
-        widget.bind('<Leave>', lambda e: widget.config(bg=normal_bg))
+    def _update_status_pill(self):
+        self._sb_frame.update_idletasks()
+        fw = self._sb_frame.winfo_reqwidth()
+        fh = self._sb_frame.winfo_reqheight()
+        pad = 3
+        pw = fw + 2*pad
+        ph = fh + 2*pad
+        r  = ph // 2  # full capsule
+
+        self._sb_pill.config(width=pw, height=ph)
+        self._sb_pill.delete('all')
+        _smooth_pill(self._sb_pill, 0, 0, pw-1, ph-1, r=r,
+                     fill=TOOLBAR_BG, outline=BORDER)
+        self._sb_pill.create_window(
+            pw // 2, ph // 2, window=self._sb_frame, anchor='center')
+
+    # ── Button helpers ────────────────────────────────────────────────────────
+    def _make_btn(self, parent, text, bg, hover_bg, fg,
+                  command=None, state='normal'):
+        b = tk.Button(
+            parent, text=text, bg=bg, fg=fg,
+            activebackground=hover_bg, activeforeground=fg,
+            relief='flat', bd=0, padx=10, pady=6,
+            font=UI_FONT,
+            cursor='hand2' if state == 'normal' else 'arrow',
+            state=state, disabledforeground=TEXT_DIM,
+            command=command,
+        )
+        if state == 'normal':
+            b.bind('<Enter>', lambda e, h=hover_bg: b.config(bg=h))
+            b.bind('<Leave>', lambda e, n=bg:       b.config(bg=n))
+        return b
 
     def _dot_draw(self, color):
         self._dot.delete('all')
-        self._dot.create_oval(1, 1, 6, 6, fill=color, outline='')
+        self._dot.create_oval(0, 0, 7, 7, fill=color, outline='')
 
-    def _set_status(self, text, fg=TEXT_SEC, dot=ACCENT_PUR):
+    def _set_status(self, text, fg=TEXT_SEC, dot=TEXT_DIM):
         self.status_label.config(text=text, fg=fg)
         self._dot_draw(dot)
+        self.root.after(10, self._update_status_pill)
 
     def _enable_run_btn(self):
         self.run_btn.config(
             state='normal',
-            bg=GREEN_BTN, fg='white',
-            activebackground=GREEN_HOV, activeforeground='white',
+            bg=ACCENT_GREEN, fg='#062512',
+            activebackground=ACCENT_GREEN2, activeforeground='#062512',
             cursor='hand2',
         )
-        self._hover(self.run_btn, GREEN_BTN, GREEN_HOV)
+        self.run_btn.bind('<Enter>', lambda e: self.run_btn.config(bg=ACCENT_GREEN2))
+        self.run_btn.bind('<Leave>', lambda e: self.run_btn.config(bg=ACCENT_GREEN))
+        self.root.after(10, self._update_toolbar_pill)
+
+    # ── Animation: scan sweep ─────────────────────────────────────────────────
+    def _start_scan(self):
+        self._scan_running = True
+        self._scan_x = -160
+        ch = max(self.canvas.winfo_height(), 2)
+        ws = 160
+
+        arr = np.zeros((ch, ws, 4), dtype=np.uint8)
+        for x in range(ws):
+            t = math.sin(math.pi * x / ws)
+            arr[:, x, 0] = int(123 * t)
+            arr[:, x, 1] = int(47  * t)
+            arr[:, x, 2] = int(190 * t)
+            arr[:, x, 3] = int(160 * t)
+
+        self._scan_img_ref = ImageTk.PhotoImage(
+            Image.fromarray(arr, 'RGBA'))
+        self.canvas.create_image(
+            self._scan_x, 0, image=self._scan_img_ref,
+            anchor='nw', tags='scan_anim')
+        self._tick_scan()
+
+    def _tick_scan(self):
+        if not self._scan_running:
+            return
+        self._scan_x += 12
+        if self._scan_x > self.canvas.winfo_width():
+            self._scan_x = -160
+        self.canvas.coords('scan_anim', self._scan_x, 0)
+        self.root.after(28, self._tick_scan)
+
+    def _stop_scan(self):
+        self._scan_running = False
+        self.canvas.delete('scan_anim')
+
+    # ── Animation: pulse dot ──────────────────────────────────────────────────
+    def _start_pulse(self):
+        self._pulse_running = True
+        self._pulse_t = 0.0
+        self._tick_pulse()
+
+    def _tick_pulse(self):
+        if not self._pulse_running:
+            return
+        self._pulse_t += 0.13
+        a = 0.55 + 0.45 * math.cos(self._pulse_t)  # 0.55–1.0
+        r = 0xFF
+        g = int(0xD6 * a + 0x60 * (1 - a))
+        color = f'#{r:02x}{g:02x}00'
+        self._dot.delete('all')
+        self._dot.create_oval(0, 0, 7, 7, fill=color, outline='')
+        self.root.after(40, self._tick_pulse)
+
+    def _stop_pulse(self):
+        self._pulse_running = False
+
+    # ── Animation: spinner card ───────────────────────────────────────────────
+    def _build_spinner_card(self):
+        cw = max(self.canvas.winfo_width(),  1100)
+        ch = max(self.canvas.winfo_height(), 714)
+        cw = self.canvas.winfo_width()  or 1100
+        ch = self.canvas.winfo_height() or 714
+
+        card_w, card_h = 252, 64
+        self._spin_cv = tk.Canvas(
+            self.main_frame,
+            width=card_w, height=card_h,
+            bg=BG_WIN, highlightthickness=0)
+        self._spin_cv.place(
+            x=cw // 2 - card_w // 2,
+            y=ch // 2 - card_h // 2)
+
+        _smooth_pill(self._spin_cv, 0, 0, card_w-1, card_h-1, r=8,
+                     fill='#0D0D1A', outline=BORDER)
+
+        # Spinner track + arc
+        sx, sy, sr = 32, 32, 14
+        self._spin_cv.create_oval(
+            sx-sr, sy-sr, sx+sr, sy+sr,
+            outline='#1e1e38', width=3, fill='', tags='sp_track')
+        self._spin_cv.create_arc(
+            sx-sr, sy-sr, sx+sr, sy+sr,
+            start=0, extent=70, outline=ACCENT_PUR,
+            width=3, style='arc', tags='sp_arc')
+
+        # Labels
+        self._spin_cv.create_text(
+            56, 26, anchor='w',
+            text='Cellpose v3.0 分析中',
+            fill=TEXT_PRI, font=('Arial', 10, 'bold'))
+        self._spin_cv.create_text(
+            57, 44, anchor='w',
+            text='model: cyto3',
+            fill=TEXT_DIM, font=MONO_FONT)
+
+        self._spin_running = True
+        self._spin_angle   = 0
+        self._tick_spinner()
+
+    def _tick_spinner(self):
+        if not self._spin_running:
+            return
+        self._spin_angle = (self._spin_angle + 10) % 360
+        if hasattr(self, '_spin_cv') and self._spin_cv.winfo_exists():
+            self._spin_cv.itemconfig('sp_arc', start=self._spin_angle)
+        self._spin_after_id = self.root.after(28, self._tick_spinner)
+
+    def _destroy_spinner_card(self):
+        self._spin_running = False
+        if self._spin_after_id:
+            self.root.after_cancel(self._spin_after_id)
+            self._spin_after_id = None
+        if hasattr(self, '_spin_cv') and self._spin_cv.winfo_exists():
+            self._spin_cv.destroy()
 
     # ── Actions ───────────────────────────────────────────────────────────────
     def load_image(self):
@@ -268,12 +496,15 @@ class CellAppCP3:
                 np.fromfile(path, dtype=np.uint8), cv2.IMREAD_COLOR)
             self.display_image(self.raw_image)
             self._enable_run_btn()
-            self._set_status('图片已载入', TEXT_PRI, ACCENT_PUR)
+            self._set_status('图片载入成功', TEXT_PRI, ACCENT_PUR)
 
     def run_analysis(self):
         if self.raw_image is None:
             return
-        self._set_status('正在分析...', ORANGE, ORANGE)
+        self._set_status('正在分析中...', ACCENT_YELLOW, ACCENT_YELLOW)
+        self._start_scan()
+        self._start_pulse()
+        self._build_spinner_card()
         self.root.update()
         try:
             masks, flows, styles = self.model.eval(
@@ -285,18 +516,24 @@ class CellAppCP3:
                 min_size=200,
                 resample=True,
             )[:3]
+            self._stop_scan()
+            self._stop_pulse()
+            self._destroy_spinner_card()
             self.render_results(masks)
         except Exception as e:
+            self._stop_scan()
+            self._stop_pulse()
+            self._destroy_spinner_card()
             messagebox.showerror("识别失败", f"{e}")
 
     # ── Render ────────────────────────────────────────────────────────────────
     def render_results(self, masks):
-        res_img = self.raw_image.copy()
-        gray    = cv2.cvtColor(self.raw_image, cv2.COLOR_BGR2GRAY)
+        res_img  = self.raw_image.copy()
+        gray     = cv2.cvtColor(self.raw_image, cv2.COLOR_BGR2GRAY)
         cell_ids = np.unique(masks)[1:]
         total_detected = len(cell_ids)
 
-        # ── Step 1: completeness filter ──────────────────────────────────────
+        # ── Step 1: completeness ──────────────────────────────────────────────
         candidates = []
         for cid in cell_ids:
             mask = (masks == cid).astype(np.uint8)
@@ -315,18 +552,18 @@ class CellAppCP3:
             hull_comp = mask_area / hull_area if hull_area > 0 else 0.0
 
             (_, _), er = cv2.minEnclosingCircle(contours[0])
-            circle_area = np.pi * er * er
+            circle_area = math.pi * er * er
             circle_comp = mask_area / circle_area if circle_area > 0 else 0.0
 
             completeness = circle_comp if touches else hull_comp
             method       = "circle"    if touches else "hull"
 
-            print(f"  cell {cid}: mask={mask_area:.0f}px  hull_comp={hull_comp:.3f}"
-                  f"  circle_comp={circle_comp:.3f}  touches={'Y' if touches else 'N'}"
-                  f"  → using {method}={completeness:.3f}")
+            print(f"  cell {cid}: mask={mask_area:.0f}px  hull={hull_comp:.3f}"
+                  f"  circle={circle_comp:.3f}  touches={'Y' if touches else 'N'}"
+                  f"  → {method}={completeness:.3f}")
 
             if completeness < 0.85:
-                print(f"  [skip-completeness] cell {cid}: {method}_comp={completeness:.3f} < 0.85")
+                print(f"  [skip] cell {cid}: {method}={completeness:.3f} < 0.85")
                 continue
 
             perimeter = cv2.arcLength(contours[0], True)
@@ -336,29 +573,30 @@ class CellAppCP3:
             })
         print(f"[Step1] 完整度过滤后: {len(candidates)} / {total_detected}")
 
-        # ── Step 2: area filter ───────────────────────────────────────────────
+        # ── Step 2: area ──────────────────────────────────────────────────────
         if candidates:
             median_area = float(np.median([c["mask_area"] for c in candidates]))
             area_thresh = median_area * 0.1
-            before2 = len(candidates)
-            filtered = []
+            before2     = len(candidates)
+            filtered    = []
             for c in candidates:
                 if c["mask_area"] < area_thresh:
-                    print(f"  [skip-area] cell {c['cid']}: area={c['mask_area']:.0f} < thresh={area_thresh:.0f}")
+                    print(f"  [skip-area] cell {c['cid']}: "
+                          f"area={c['mask_area']:.0f} < thresh={area_thresh:.0f}")
                     continue
                 filtered.append(c)
             candidates = filtered
-            print(f"[Step2] 面积过滤后: {len(candidates)} / {before2}"
-                  f"  (中位数={median_area:.0f}, 阈值={area_thresh:.0f})")
+            print(f"[Step2] 面积过滤后: {len(candidates)} / {before2}  "
+                  f"(中位数={median_area:.0f}, 阈值={area_thresh:.0f})")
 
-        # ── Step 3: circularity filter ────────────────────────────────────────
+        # ── Step 3: circularity ───────────────────────────────────────────────
         filtered = []
-        before3 = len(candidates)
+        before3  = len(candidates)
         for c in candidates:
-            circ = (4 * np.pi * c["mask_area"] / (c["perimeter"] ** 2)
+            circ = (4 * math.pi * c["mask_area"] / (c["perimeter"] ** 2)
                     if c["perimeter"] > 0 else 0.0)
             if circ < 0.4:
-                print(f"  [skip-circularity] cell {c['cid']}: circularity={circ:.3f} < 0.40")
+                print(f"  [skip-circ] cell {c['cid']}: circularity={circ:.3f} < 0.40")
                 continue
             filtered.append(c)
         candidates = filtered
@@ -370,7 +608,7 @@ class CellAppCP3:
             cell_pixels = gray[c["mask"] > 0]
             if len(cell_pixels) > 50:
                 sorted_px = np.sort(cell_pixels)[::-1]
-                top5 = max(1, int(len(sorted_px) * 0.05))
+                top5  = max(1, int(len(sorted_px) * 0.05))
                 peak  = float(np.mean(sorted_px[:top5]))
                 M = cv2.moments(c["mask"])
                 if M["m00"] > 0:
@@ -396,26 +634,30 @@ class CellAppCP3:
             cv2.putText(res_img, f"({cx}, {cy})", (cx + 8, cy - 8),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
             print(f"最亮细胞坐标: ({cx}, {cy})  亮度值: {bv}")
-            self._set_status(f'完成 · ({cx}, {cy})  亮度={bv}', ACCENT_GREEN, ACCENT_GREEN)
+            self._set_status(
+                f'完成 · ({cx}, {cy})  亮度={bv}',
+                ACCENT_GREEN, ACCENT_GREEN)
         else:
-            self._set_status('完成（无有效细胞）', TEXT_SEC, ACCENT_PUR)
+            self._set_status('完成（无有效细胞）', TEXT_SEC, TEXT_DIM)
 
         self.display_image(res_img)
 
     # ── Display ───────────────────────────────────────────────────────────────
     def display_image(self, img):
         self.canvas.delete('empty_state')
+        self.canvas.delete('cell_image')
         img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         h, w = img.shape[:2]
         cw = self.canvas.winfo_width()  or 1100
-        ch = self.canvas.winfo_height() or 718
+        ch = self.canvas.winfo_height() or 714
         ratio = min(cw / w, ch / h)
         nw, nh = int(w * ratio), int(h * ratio)
-        img_pil = Image.fromarray(img_rgb).resize((nw, nh), Image.Resampling.LANCZOS)
+        img_pil = Image.fromarray(img_rgb).resize(
+            (nw, nh), Image.Resampling.LANCZOS)
         self.tk_img = ImageTk.PhotoImage(img_pil)
-        self.canvas.delete('image')
-        self.canvas.create_image(cw // 2, ch // 2, image=self.tk_img,
-                                  anchor='center', tags='image')
+        self.canvas.create_image(
+            cw // 2, ch // 2, image=self.tk_img,
+            anchor='center', tags='cell_image')
 
 
 if __name__ == "__main__":
