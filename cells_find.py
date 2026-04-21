@@ -152,11 +152,9 @@ class CellAppCP3:
                 M = cv2.moments(mask)
                 if M["m00"] > 0:
                     cx, cy = int(M["m10"]/M["m00"]), int(M["m01"]/M["m00"])
-                    _, er = cv2.minEnclosingCircle(contours[0])
                     cell_list.append({
                         "brightness": peak_brightness,
                         "pos": (cx, cy),
-                        "radius": int(er),
                         "contours": contours
                     })
 
@@ -166,18 +164,18 @@ class CellAppCP3:
         cell_list.sort(key=lambda x: x['brightness'], reverse=True)
 
         if cell_list:
-            # 普通细胞（除最亮）：黄色圆圈描边，无中心点
+            # 普通细胞（除最亮）：黄色沿轮廓描边，无中心点
             for cell in cell_list[1:]:
-                cv2.circle(res_img, cell['pos'], cell['radius'], (0, 255, 255), 2)  # BGR yellow
+                cv2.drawContours(res_img, cell['contours'], -1, (0, 255, 255), 2)  # BGR yellow
 
-            # 最亮细胞：绿色圆圈描边 + 绿色中心点 + 绿色坐标
+            # 最亮细胞：绿色沿轮廓描边 + 绿色中心点 + 绿色坐标
             top = cell_list[0]
             cx, cy = top['pos']
             brightness_val = int(top['brightness'])
-            cv2.circle(res_img, (cx, cy), top['radius'], (0, 255, 0), 2)   # green outline
-            cv2.circle(res_img, (cx, cy), 5, (0, 255, 0), -1)              # green center dot
+            cv2.drawContours(res_img, top['contours'], -1, (0, 255, 0), 2)  # green contour
+            cv2.circle(res_img, (cx, cy), 5, (0, 255, 0), -1)               # green center dot
             cv2.putText(res_img, f"({cx}, {cy})", (cx + 8, cy - 8),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)    # green coords
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)     # green coords
 
             status_msg = f"✅ 完成  最亮细胞: 坐标({cx}, {cy})  亮度={brightness_val}"
             print(f"最亮细胞坐标: ({cx}, {cy})  亮度值: {brightness_val}")

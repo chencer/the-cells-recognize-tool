@@ -51,11 +51,10 @@ def simulate_render(raw_image, masks, output_path):
             M = cv2.moments(mask)
             if M["m00"] > 0:
                 cx, cy = int(M["m10"]/M["m00"]), int(M["m01"]/M["m00"])
-                _, er = cv2.minEnclosingCircle(contours[0])
                 cell_list.append({
                     "brightness": peak_brightness,
                     "pos": (cx, cy),
-                    "radius": int(er),
+                    "contours": contours,
                 })
 
     print(f"过滤前细胞数: {total_detected}  过滤后细胞数: {len(cell_list)}  (过滤掉: {skipped_incomplete})")
@@ -64,12 +63,12 @@ def simulate_render(raw_image, masks, output_path):
 
     if cell_list:
         for cell in cell_list[1:]:
-            cv2.circle(res_img, cell['pos'], cell['radius'], (0, 255, 255), 2)
+            cv2.drawContours(res_img, cell['contours'], -1, (0, 255, 255), 2)
 
         top = cell_list[0]
         cx, cy = top['pos']
         brightness_val = int(top['brightness'])
-        cv2.circle(res_img, (cx, cy), top['radius'], (0, 255, 0), 2)
+        cv2.drawContours(res_img, top['contours'], -1, (0, 255, 0), 2)
         cv2.circle(res_img, (cx, cy), 5, (0, 255, 0), -1)
         cv2.putText(res_img, f"({cx}, {cy})", (cx + 8, cy - 8),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
