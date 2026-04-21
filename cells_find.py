@@ -111,68 +111,92 @@ class CellAppCP3:
     def render_results(self, masks):
         res_img = self.raw_image.copy()
         gray = cv2.cvtColor(self.raw_image, cv2.COLOR_BGR2GRAY)
-        H, W = gray.shape
         cell_ids = np.unique(masks)[1:]
-
         total_detected = len(cell_ids)
-        skipped_incomplete = 0
-        cell_list = []
 
+        # ── Step 1: 凸包完整度过滤 (mask像素数 / 凸包面积 >= 70%) ──────────────
+        candidates = []
         for cid in cell_ids:
             mask = (masks == cid).astype(np.uint8)
-
-            # 凸包完整度过滤：mask实际像素数 / 凸包面积 < 70% 则剔除
             contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             if not contours:
-                print(f"  [skip] cell {cid}: no contours")
-                skipped_incomplete += 1
                 continue
             hull = cv2.convexHull(contours[0])
             hull_area = cv2.contourArea(hull)
             if hull_area == 0:
-                print(f"  [skip] cell {cid}: hull_area=0")
-                skipped_incomplete += 1
                 continue
             mask_area = float(np.sum(mask > 0))
             completeness = mask_area / hull_area
             if completeness < 0.7:
-                print(f"  [skip] cell {cid}: completeness={completeness:.3f} < 0.70")
-                skipped_incomplete += 1
+                print(f"  [skip-completeness] cell {cid}: completeness={completeness:.3f} < 0.70")
                 continue
+            perimeter = cv2.arcLength(contours[0], True)
+            candidates.append({
+                "cid": cid, "mask": mask, "mask_area": mask_area,
+                "contours": contours, "perimeter": perimeter,
+            })
+        print(f"[Step1] 凸包完整度过滤后: {len(candidates)} / {total_detected}")
 
-            cell_pixels = gray[mask > 0]
+        # ── Step 2: 面积过滤 (< 中位数面积 × 10% 剔除) ───────────────────────
+        if candidates:
+            median_area = float(np.median([c["mask_area"] for c in candidates]))
+            area_thresh = median_area * 0.1
+            filtered = []
+            for c in candidates:
+                if c["mask_area"] < area_thresh:
+                    print(f"  [skip-area] cell {c['cid']}: area={c['mask_area']:.0f} < thresh={area_thresh:.0f}")
+                    continue
+                filtered.append(c)
+            print(f"[Step2] 面积过滤后: {len(filtered)} / {len(candidates)}  "
+                  f"(中位数={median_area:.0f}, 阈值={area_thresh:.0f})")
+            candidates = filtered
+
+        # ── Step 3: 圆形度过滤 (4π×面积/周长² >= 0.4) ───────────────────────
+        filtered = []
+        for c in candidates:
+            circ = (4 * np.pi * c["mask_area"] / (c["perimeter"] ** 2)
+                    if c["perimeter"] > 0 else 0.0)
+            if circ < 0.4:
+                print(f"  [skip-circularity] cell {c['cid']}: circularity={circ:.3f} < 0.40")
+                continue
+            filtered.append(c)
+        print(f"[Step3] 圆形度过滤后: {len(filtered)} / {len(candidates)}")
+        candidates = filtered
+
+        # ── 计算亮度，构建最终列表 ──────────────────────────────────────────
+        cell_list = []
+        for c in candidates:
+            cell_pixels = gray[c["mask"] > 0]
             if len(cell_pixels) > 50:
-                sorted_pixels = np.sort(cell_pixels)[::-1]
-                top_5_count = max(1, int(len(sorted_pixels) * 0.05))
-                peak_brightness = np.mean(sorted_pixels[:top_5_count])
-
-                M = cv2.moments(mask)
+                sorted_px = np.sort(cell_pixels)[::-1]
+                top5 = max(1, int(len(sorted_px) * 0.05))
+                peak_brightness = float(np.mean(sorted_px[:top5]))
+                M = cv2.moments(c["mask"])
                 if M["m00"] > 0:
-                    cx, cy = int(M["m10"]/M["m00"]), int(M["m01"]/M["m00"])
+                    cx = int(M["m10"] / M["m00"])
+                    cy = int(M["m01"] / M["m00"])
                     cell_list.append({
                         "brightness": peak_brightness,
                         "pos": (cx, cy),
-                        "contours": contours
+                        "contours": c["contours"],
                     })
 
-        print(f"过滤前细胞数: {total_detected}  过滤后细胞数: {len(cell_list)}  (过滤掉: {skipped_incomplete})")
-
-        # 按峰值亮度排序
-        cell_list.sort(key=lambda x: x['brightness'], reverse=True)
+        print(f"过滤前细胞数: {total_detected}  最终有效细胞: {len(cell_list)}")
+        cell_list.sort(key=lambda x: x["brightness"], reverse=True)
 
         if cell_list:
-            # 普通细胞（除最亮）：黄色沿轮廓描边，无中心点
+            # 普通细胞：黄色轮廓描边，无中心点
             for cell in cell_list[1:]:
-                cv2.drawContours(res_img, cell['contours'], -1, (0, 255, 255), 2)  # BGR yellow
+                cv2.drawContours(res_img, cell["contours"], -1, (0, 255, 255), 2)
 
-            # 最亮细胞：绿色沿轮廓描边 + 绿色中心点 + 绿色坐标
+            # 最亮细胞：绿色轮廓描边 + 绿色中心点 + 绿色坐标
             top = cell_list[0]
-            cx, cy = top['pos']
-            brightness_val = int(top['brightness'])
-            cv2.drawContours(res_img, top['contours'], -1, (0, 255, 0), 2)  # green contour
-            cv2.circle(res_img, (cx, cy), 5, (0, 255, 0), -1)               # green center dot
+            cx, cy = top["pos"]
+            brightness_val = int(top["brightness"])
+            cv2.drawContours(res_img, top["contours"], -1, (0, 255, 0), 2)
+            cv2.circle(res_img, (cx, cy), 5, (0, 255, 0), -1)
             cv2.putText(res_img, f"({cx}, {cy})", (cx + 8, cy - 8),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)     # green coords
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
             status_msg = f"✅ 完成  最亮细胞: 坐标({cx}, {cy})  亮度={brightness_val}"
             print(f"最亮细胞坐标: ({cx}, {cy})  亮度值: {brightness_val}")
