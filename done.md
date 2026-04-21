@@ -53,6 +53,7 @@ if (np.any(mask[0, :] > 0) or np.any(mask[-1, :] > 0) or
 
 ## Release 链接
 
-https://github.com/chencer/the-cells-recognize-tool/releases/tag/v1.1.0
-
-- Windows EXE 已上传至 Release Assets（`cells_find.exe`）
+- v1.1.0: https://github.com/chencer/the-cells-recognize-tool/releases/tag/v1.1.0
+- v1.2.0: https://github.com/chencer/the-cells-recognize-tool/releases/tag/v1.2.0（轮廓描边）
+- v1.3.0: https://github.com/chencer/the-cells-recognize-tool/releases/tag/v1.3.0（边缘过滤修正）
+- v1.4.0: https://github.com/chencer/the-cells-recognize-tool/releases/tag/v1.4.0（面积+圆形度噪声过滤）
