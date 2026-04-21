@@ -7,31 +7,54 @@ import os
 def simulate_render(raw_image, masks, output_path):
     res_img = raw_image.copy()
     gray = cv2.cvtColor(raw_image, cv2.COLOR_BGR2GRAY)
+    H_img, W_img = gray.shape
     cell_ids = np.unique(masks)[1:]
     total_detected = len(cell_ids)
 
-    # Step 1: convex hull completeness
+    # Step 1: completeness filter
+    # boundary cells → minEnclosingCircle completeness (hull fails for convex caps)
+    # non-boundary cells → convex hull completeness
     candidates = []
     for cid in cell_ids:
         mask = (masks == cid).astype(np.uint8)
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if not contours:
-            continue
-        hull = cv2.convexHull(contours[0])
-        hull_area = cv2.contourArea(hull)
-        if hull_area == 0:
+            print(f"  cell {cid}: no contours → skip")
             continue
         mask_area = float(np.sum(mask > 0))
-        completeness = mask_area / hull_area
+
+        touches = (np.any(mask[0, :] > 0) or np.any(mask[-1, :] > 0) or
+                   np.any(mask[:, 0] > 0) or np.any(mask[:, -1] > 0))
+
+        hull = cv2.convexHull(contours[0])
+        hull_area = cv2.contourArea(hull)
+        hull_comp = mask_area / hull_area if hull_area > 0 else 0.0
+
+        (_, _), er = cv2.minEnclosingCircle(contours[0])
+        circle_area = np.pi * er * er
+        circle_comp = mask_area / circle_area if circle_area > 0 else 0.0
+
+        if touches:
+            completeness = circle_comp
+            method = "circle"
+        else:
+            completeness = hull_comp
+            method = "hull"
+
+        print(f"  cell {cid}: mask={mask_area:.0f}px  hull_comp={hull_comp:.3f}"
+              f"  circle_comp={circle_comp:.3f}  touches={'Y' if touches else 'N'}"
+              f"  → using {method}={completeness:.3f}")
+
         if completeness < 0.7:
-            print(f"  [skip-completeness] cell {cid}: completeness={completeness:.3f}")
+            print(f"  [skip-completeness] cell {cid}: {method}_comp={completeness:.3f} < 0.70")
             continue
+
         perimeter = cv2.arcLength(contours[0], True)
         candidates.append({
             "cid": cid, "mask": mask, "mask_area": mask_area,
             "contours": contours, "perimeter": perimeter,
         })
-    print(f"[Step1] 凸包完整度过滤后: {len(candidates)} / {total_detected}")
+    print(f"[Step1] 完整度过滤后: {len(candidates)} / {total_detected}")
 
     # Step 2: area filter
     if candidates:
@@ -96,13 +119,14 @@ def simulate_render(raw_image, masks, output_path):
 
 def test_all_filters():
     """
-    5 synthetic cells:
-      1. full circle r=50, center (150,200), bright=200     → PASS all
-      2. full circle r=48, touching right boundary           → PASS (completeness high, complete cell)
-      3. crescent ring (low completeness ~0.44)              → FAIL step1
-      4. tiny dot r=4 (area << median*0.1)                   → FAIL step2
-      5. elongated thin strip (low circularity ~0.15)        → FAIL step3
-    Expected final count: 2
+    6 synthetic cells:
+      1. full circle r=50, center (150,200), bright=200        → PASS all filters
+      2. full circle r=50, touching right boundary (80% inside) → PASS (circle_comp≈0.8)
+      3. partial circle at top (centroid y=15, r=50) ~30% vis   → FAIL step1 (circle_comp<0.7)
+      4. crescent ring (low hull completeness ~0.42)            → FAIL step1 (hull_comp<0.7)
+      5. tiny dot r=4 (area << median*0.1)                     → FAIL step2
+      6. elongated thin strip 120×6 (low circularity ~0.15)    → FAIL step3
+    Expected final count: 2 (cells 1 and 2)
     """
     H, W = 400, 700
     img = np.zeros((H, W, 3), dtype=np.uint8)
@@ -114,39 +138,56 @@ def test_all_filters():
         cv2.circle(m, (cx, cy), r, 1, -1)
         masks[(m > 0) & (masks == 0)] = cid
 
-    # 1: full bright circle
+    # 1: full bright circle, not touching boundary
     place_circle(1, 150, 200, 50, 200)
-    # 2: full circle touching right edge (center at W-10, r=50 → right at W+40)
-    place_circle(2, W - 10, 200, 50, 150)
-    # 3: crescent (outer r=55 minus inner r=45)
-    cv2.circle(img, (400, 200), 55, (170,)*3, -1)
-    cv2.circle(img, (400, 200), 42, (0,)*3, -1)
-    m3 = np.zeros((H, W), dtype=np.uint8)
-    cv2.circle(m3, (400, 200), 55, 1, -1)
-    cv2.circle(m3, (400, 200), 42, 0, -1)
-    masks[(m3 > 0) & (masks == 0)] = 3
-    # 4: tiny dot r=4
-    place_circle(4, 550, 100, 4, 180)
-    # 5: thin horizontal strip 120×6 px
-    cv2.rectangle(img, (50, 320), (170, 326), (160,)*3, -1)
-    m5 = np.zeros((H, W), dtype=np.uint8)
-    cv2.rectangle(m5, (50, 320), (170, 326), 1, -1)
-    masks[(m5 > 0) & (masks == 0)] = 5
+
+    # 2: circle just barely touching right boundary (center at x=W-45, r=50 → ~5px outside)
+    # ~98% inside the image → circle_comp ≈ 0.98 → should PASS
+    place_circle(2, W - 45, 200, 50, 150)
+
+    # 3: severely truncated at top — center at y=-10, r=50 → only ~40% visible
+    # hull_comp ≈ 1.0 (cap is convex), circle_comp < 0.7 → should FAIL
+    place_circle(3, 350, -10, 50, 180)
+
+    # 4: crescent (outer r=55 minus inner r=45) → hull_comp ≈ 0.42 → FAIL
+    cv2.circle(img, (500, 200), 55, (170,)*3, -1)
+    cv2.circle(img, (500, 200), 42, (0,)*3, -1)
+    m4 = np.zeros((H, W), dtype=np.uint8)
+    cv2.circle(m4, (500, 200), 55, 1, -1)
+    cv2.circle(m4, (500, 200), 42, 0, -1)
+    masks[(m4 > 0) & (masks == 0)] = 4
+
+    # 5: tiny dot r=4 → FAIL area filter
+    place_circle(5, 620, 100, 4, 180)
+
+    # 6: thin horizontal strip 120×6 → FAIL circularity filter
+    cv2.rectangle(img, (50, 340), (170, 346), (160,)*3, -1)
+    m6 = np.zeros((H, W), dtype=np.uint8)
+    cv2.rectangle(m6, (50, 340), (170, 346), 1, -1)
+    masks[(m6 > 0) & (masks == 0)] = 6
 
     out = os.path.join(os.path.dirname(__file__), "test_result.png")
+    print("=== Per-cell completeness report ===")
     cell_list, total = simulate_render(img, masks, out)
 
     print(f"\n[TEST] total={total}, final={len(cell_list)}")
-    assert total == 5, f"Expected 5 detected, got {total}"
+    assert total == 6, f"Expected 6 detected, got {total}"
     assert len(cell_list) == 2, f"Expected 2 after all filters, got {len(cell_list)}"
-    # boundary-touching complete cell must be kept
+
+    # cell 2 (boundary-touching but complete) must be kept
     kept_x = [c["pos"][0] for c in cell_list]
-    assert any(x > W - 100 for x in kept_x), "Boundary-touching complete cell should be kept"
-    print("[TEST] PASS: all three filters work correctly")
-    print(f"Result saved to: {out}")
+    assert any(x > W - 100 for x in kept_x), \
+        "Boundary-touching complete cell should be KEPT"
+
+    # cell 3 (30% visible truncated) must NOT be in results
+    kept_y = [c["pos"][1] for c in cell_list]
+    assert not any(y < 50 for y in kept_y), \
+        "Severely truncated boundary cell (y≈15) should be FILTERED"
+
+    print("[TEST] PASS: boundary truncated filtered, complete boundary cell kept")
+    print(f"Result: {out}")
     return out
 
 
 if __name__ == "__main__":
-    print("=== Full filter test ===")
     test_all_filters()

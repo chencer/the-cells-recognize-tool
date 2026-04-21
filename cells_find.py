@@ -114,28 +114,52 @@ class CellAppCP3:
         cell_ids = np.unique(masks)[1:]
         total_detected = len(cell_ids)
 
-        # ── Step 1: 凸包完整度过滤 (mask像素数 / 凸包面积 >= 70%) ──────────────
+        # ── Step 1: 完整度过滤 ───────────────────────────────────────────────
+        # 接触边界的细胞用 minEnclosingCircle 面积作分母（hull 对弧形 cap 无效）
+        # 不接触边界的细胞用凸包面积作分母（过滤月牙/不规则形状）
+        H_img, W_img = gray.shape
         candidates = []
         for cid in cell_ids:
             mask = (masks == cid).astype(np.uint8)
             contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             if not contours:
-                continue
-            hull = cv2.convexHull(contours[0])
-            hull_area = cv2.contourArea(hull)
-            if hull_area == 0:
+                print(f"  cell {cid}: no contours → skip")
                 continue
             mask_area = float(np.sum(mask > 0))
-            completeness = mask_area / hull_area
+
+            touches = (np.any(mask[0, :] > 0) or np.any(mask[-1, :] > 0) or
+                       np.any(mask[:, 0] > 0) or np.any(mask[:, -1] > 0))
+
+            hull = cv2.convexHull(contours[0])
+            hull_area = cv2.contourArea(hull)
+            hull_comp = mask_area / hull_area if hull_area > 0 else 0.0
+
+            (_, _), er = cv2.minEnclosingCircle(contours[0])
+            circle_area = np.pi * er * er
+            circle_comp = mask_area / circle_area if circle_area > 0 else 0.0
+
+            if touches:
+                completeness = circle_comp
+                method = "circle"
+            else:
+                completeness = hull_comp
+                method = "hull"
+
+            # 逐个打印所有细胞的完整度数值
+            print(f"  cell {cid}: mask={mask_area:.0f}px  hull_comp={hull_comp:.3f}"
+                  f"  circle_comp={circle_comp:.3f}  touches={'Y' if touches else 'N'}"
+                  f"  → using {method}={completeness:.3f}")
+
             if completeness < 0.7:
-                print(f"  [skip-completeness] cell {cid}: completeness={completeness:.3f} < 0.70")
+                print(f"  [skip-completeness] cell {cid}: {method}_comp={completeness:.3f} < 0.70")
                 continue
+
             perimeter = cv2.arcLength(contours[0], True)
             candidates.append({
                 "cid": cid, "mask": mask, "mask_area": mask_area,
                 "contours": contours, "perimeter": perimeter,
             })
-        print(f"[Step1] 凸包完整度过滤后: {len(candidates)} / {total_detected}")
+        print(f"[Step1] 完整度过滤后: {len(candidates)} / {total_detected}")
 
         # ── Step 2: 面积过滤 (< 中位数面积 × 10% 剔除) ───────────────────────
         if candidates:
