@@ -20,25 +20,22 @@ def simulate_render(raw_image, masks, output_path):
     for cid in cell_ids:
         mask = (masks == cid).astype(np.uint8)
 
-        # Edge boundary filter
-        if (np.any(mask[0, :] > 0) or np.any(mask[-1, :] > 0) or
-                np.any(mask[:, 0] > 0) or np.any(mask[:, -1] > 0)):
-            skipped_incomplete += 1
-            continue
-
         # Convex hull completeness filter
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if not contours:
+            print(f"  [skip] cell {cid}: no contours")
             skipped_incomplete += 1
             continue
         hull = cv2.convexHull(contours[0])
         hull_area = cv2.contourArea(hull)
         if hull_area == 0:
+            print(f"  [skip] cell {cid}: hull_area=0")
             skipped_incomplete += 1
             continue
         mask_area = float(np.sum(mask > 0))
         completeness = mask_area / hull_area
         if completeness < 0.7:
+            print(f"  [skip] cell {cid}: completeness={completeness:.3f} < 0.70")
             skipped_incomplete += 1
             continue
 
@@ -83,7 +80,11 @@ def simulate_render(raw_image, masks, output_path):
 
 
 def test_synthetic():
-    """Create synthetic image with one edge cell and two full cells."""
+    """Test completeness filter:
+    - Cell 1: full circle (completeness ~1.0) → keep
+    - Cell 2: full circle touching boundary (completeness ~1.0) → keep (not penalized for touching edge)
+    - Cell 3: crescent/C-shape with large hull but small mask (completeness ~0.4) → filter
+    """
     H, W = 400, 600
     img = np.zeros((H, W, 3), dtype=np.uint8)
     masks = np.zeros((H, W), dtype=np.int32)
@@ -94,26 +95,34 @@ def test_synthetic():
     cv2.circle(mask1, (150, 200), 50, 1, -1)
     masks[mask1 > 0] = 1
 
-    # Cell 2: full circle, center (400, 200), radius 45, medium
-    cv2.circle(img, (400, 200), 45, (150, 150, 150), -1)
+    # Cell 2: full circle touching right boundary (center at x=555, r=50 → right edge at x=605 > W=600)
+    cv2.circle(img, (555, 200), 50, (150, 150, 150), -1)
     mask2 = np.zeros((H, W), dtype=np.uint8)
-    cv2.circle(mask2, (400, 200), 45, 1, -1)
-    masks[mask2 > 0] = 2
+    cv2.circle(mask2, (555, 200), 50, 1, -1)
+    masks[(mask2 > 0) & (masks == 0)] = 2
 
-    # Cell 3 (EDGE): circle centered at (5, 300), mostly outside image — only ~30% visible
-    cv2.circle(img, (5, 300), 50, (180, 180, 180), -1)
+    # Cell 3: crescent shape — large outer circle minus inner circle → low completeness
+    # Outer circle r=60, inner hole r=50 → ring area ≈ π(60²-50²) ≈ 3456px
+    # Hull ≈ π*60² ≈ 11310 → completeness ≈ 0.31 → should be filtered
     mask3 = np.zeros((H, W), dtype=np.uint8)
-    cv2.circle(mask3, (5, 300), 50, 1, -1)
+    cv2.circle(mask3, (400, 300), 60, 1, -1)
+    cv2.circle(mask3, (400, 300), 45, 0, -1)   # cut out center → crescent
+    cv2.circle(img, (400, 300), 60, (170, 170, 170), -1)
+    cv2.circle(img, (400, 300), 45, (0, 0, 0), -1)
     masks[(mask3 > 0) & (masks == 0)] = 3
 
     output_path = os.path.join(os.path.dirname(__file__), "test_output_synthetic.png")
     cell_list, total, skipped = simulate_render(img, masks, output_path)
 
     print(f"\n[TEST] Total detected: {total}, After filter: {len(cell_list)}, Skipped: {skipped}")
-    assert len(cell_list) == 2, f"Expected 2 valid cells, got {len(cell_list)}"
     assert total == 3, f"Expected 3 detected, got {total}"
-    assert skipped >= 1, "Edge cell should have been filtered"
-    print("[TEST] PASS: edge cell correctly filtered out")
+    # Cell 2 (touching boundary) must be kept — completeness is high
+    kept_positions = [c['pos'] for c in cell_list]
+    assert any(x > 500 for x, y in kept_positions), \
+        "Cell touching boundary should be KEPT (completeness >= 0.7)"
+    # Cell 3 (crescent) must be filtered — completeness is low
+    assert skipped >= 1, "Crescent cell should be filtered (completeness < 0.7)"
+    print("[TEST] PASS: boundary-touching complete cell kept, crescent cell filtered")
     return output_path
 
 

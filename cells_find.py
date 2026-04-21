@@ -121,25 +121,22 @@ class CellAppCP3:
         for cid in cell_ids:
             mask = (masks == cid).astype(np.uint8)
 
-            # 边界接触过滤：mask触碰图像任意边缘则剔除（弧形cap本身是凸形，凸包比无法检测此类截断）
-            if (np.any(mask[0, :] > 0) or np.any(mask[-1, :] > 0) or
-                    np.any(mask[:, 0] > 0) or np.any(mask[:, -1] > 0)):
-                skipped_incomplete += 1
-                continue
-
             # 凸包完整度过滤：mask实际像素数 / 凸包面积 < 70% 则剔除
             contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             if not contours:
+                print(f"  [skip] cell {cid}: no contours")
                 skipped_incomplete += 1
                 continue
             hull = cv2.convexHull(contours[0])
             hull_area = cv2.contourArea(hull)
             if hull_area == 0:
+                print(f"  [skip] cell {cid}: hull_area=0")
                 skipped_incomplete += 1
                 continue
             mask_area = float(np.sum(mask > 0))
             completeness = mask_area / hull_area
             if completeness < 0.7:
+                print(f"  [skip] cell {cid}: completeness={completeness:.3f} < 0.70")
                 skipped_incomplete += 1
                 continue
 
