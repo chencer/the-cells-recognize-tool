@@ -18,18 +18,19 @@ except ImportError:
     ttk = None
 
 # ── Design tokens ─────────────────────────────────────────────────────────────
-BG_WIN        = '#0D0D1A'
-BG_TITLEBAR   = '#1a1a2e'
-TOOLBAR_BG    = '#0F0F1C'
-BORDER        = '#2A2A40'
-ACCENT_PUR    = '#7B2FBE'
-ACCENT_PUR_H  = '#8c3cd3'
+BG_WIN        = '#020203'
+BG_TITLEBAR   = '#08010F'
+TOOLBAR_BG    = '#120920'
+BORDER        = '#2D1550'
+ACCENT_PUR    = '#7C3AED'
+ACCENT_PUR_H  = '#9333EA'
 ACCENT_GREEN  = '#00E676'
 ACCENT_GREEN2 = '#00c766'
 ACCENT_YELLOW = '#FFD600'
 TEXT_PRI      = '#E0E0E0'
 TEXT_SEC      = '#9E9E9E'
-TEXT_DIM      = '#5a5a6a'
+TEXT_DIM      = '#4A2A6A'
+GLOW_BORDER   = '#7C3AED'  # rgba(124,58,237,0.4) approximated as solid for canvas
 
 if sys.platform == 'win32':
     UI_FONT   = ('Microsoft YaHei', 9, 'bold')
@@ -223,8 +224,8 @@ class CellAppCP3:
         btn_row = tk.Frame(bar, bg=BG_TITLEBAR)
         btn_row.place(relx=1.0, rely=0.5, anchor='e')
 
-        _winbtn(btn_row, '─', '#2a2a3e', self._minimize)
-        _winbtn(btn_row, '□', '#2a2a3e', self._toggle_maximize)
+        _winbtn(btn_row, '─', '#1A0A30', self._minimize)
+        _winbtn(btn_row, '□', '#1A0A30', self._toggle_maximize)
         _winbtn(btn_row, '✕', '#c42b1c', self.root.destroy)
 
         # Separator
@@ -266,9 +267,10 @@ class CellAppCP3:
             np.sqrt((xx - cx)**2 + (yy - cy)**2) / (max(w, h) * 0.75),
             0, 1)
 
-        r = (0x15 * (1 - dist) + 0x0a * dist).astype(np.uint8)
-        g = (0x20 * (1 - dist) + 0x0f * dist).astype(np.uint8)
-        b = (0x1a * (1 - dist) + 0x0c * dist).astype(np.uint8)
+        # Center: #0A0310 → Edge: #000000
+        r = (0x0A * (1 - dist)).astype(np.uint8)
+        g = (0x03 * (1 - dist)).astype(np.uint8)
+        b = (0x10 * (1 - dist)).astype(np.uint8)
 
         self._bg_img = ImageTk.PhotoImage(
             Image.fromarray(np.stack([r, g, b], axis=-1), 'RGB'))
@@ -291,7 +293,7 @@ class CellAppCP3:
         # Dashed border
         self.canvas.create_rectangle(
             cx - bw//2, cy - bh//2, cx + bw//2, cy + bh//2,
-            outline=BORDER, dash=(6, 4), width=2, fill='',
+            outline='#2D1550', dash=(6, 4), width=2, fill='',
             tags='empty_state')
 
         # Image icon (camera silhouette)
@@ -327,20 +329,20 @@ class CellAppCP3:
 
         self.import_btn = self._make_btn(
             self._tb_frame, '  导入图片  ',
-            '#252040', '#252040', TEXT_DIM,
+            '#1A0A30', '#1A0A30', TEXT_DIM,
             command=self.load_image, state='disabled')
         self.import_btn.pack(side='left', padx=(0, 4))
 
         self.run_btn = self._make_btn(
             self._tb_frame, '  细胞识别  ',
-            '#252040', '#252040', TEXT_DIM,
+            '#1A0A30', '#1A0A30', TEXT_DIM,
             command=self.run_analysis, state='disabled')
         self.run_btn.pack(side='left')
 
         # Toggle button — hidden until first analysis completes
         self.toggle_btn = self._make_btn(
             self._tb_frame, '  原图  ',
-            '#1c1c34', '#252048', TEXT_SEC,
+            '#1A0A30', '#2D1050', TEXT_SEC,
             command=self._toggle_view)
         # not packed yet
 
@@ -348,13 +350,17 @@ class CellAppCP3:
         self._tb_frame.update_idletasks()
         fw = self._tb_frame.winfo_reqwidth()
         fh = self._tb_frame.winfo_reqheight()
-        pad = 3
+        pad = 5
         pw, ph = fw + 2*pad, fh + 2*pad
 
         self._tb_pill.config(width=pw, height=ph)
         self._tb_pill.delete('all')
-        _smooth_pill(self._tb_pill, 0, 0, pw-1, ph-1, r=10,
-                     fill=TOOLBAR_BG, outline=BORDER)
+        # Outer glow ring
+        _smooth_pill(self._tb_pill, 0, 0, pw-1, ph-1, r=12,
+                     fill='', outline='#3D1A70')
+        # Inner fill
+        _smooth_pill(self._tb_pill, 2, 2, pw-3, ph-3, r=10,
+                     fill=TOOLBAR_BG, outline=GLOW_BORDER)
         self._tb_pill.create_window(
             pw // 2, ph // 2, window=self._tb_frame, anchor='center')
 
@@ -381,15 +387,19 @@ class CellAppCP3:
         self._sb_frame.update_idletasks()
         fw = self._sb_frame.winfo_reqwidth()
         fh = self._sb_frame.winfo_reqheight()
-        pad = 3
+        pad = 5
         pw = fw + 2*pad
         ph = fh + 2*pad
         r  = ph // 2  # full capsule
 
         self._sb_pill.config(width=pw, height=ph)
         self._sb_pill.delete('all')
+        # Outer glow ring
         _smooth_pill(self._sb_pill, 0, 0, pw-1, ph-1, r=r,
-                     fill=TOOLBAR_BG, outline=BORDER)
+                     fill='', outline='#3D1A70')
+        # Inner fill
+        _smooth_pill(self._sb_pill, 2, 2, pw-3, ph-3, r=r,
+                     fill=TOOLBAR_BG, outline=GLOW_BORDER)
         self._sb_pill.create_window(
             pw // 2, ph // 2, window=self._sb_frame, anchor='center')
 
@@ -491,7 +501,7 @@ class CellAppCP3:
             y=ch // 2 - card_h // 2)
 
         _smooth_pill(self._spin_cv, 0, 0, card_w-1, card_h-1, r=8,
-                     fill='#0D0D1A', outline=BORDER)
+                     fill='#08010F', outline=GLOW_BORDER)
 
         sx, sy, sr = 32, 32, 14
         self._spin_cv.create_oval(
@@ -500,7 +510,7 @@ class CellAppCP3:
         self._spin_cv.create_arc(
             sx-sr, sy-sr, sx+sr, sy+sr,
             start=0, extent=70, outline=ACCENT_PUR,
-            width=3, style='arc', tags='sp_arc')
+            width=4, style='arc', tags='sp_arc')
 
         self._spin_cv.create_text(
             56, 26, anchor='w', text=text,

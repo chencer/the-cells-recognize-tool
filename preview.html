@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CellAppCP3 — UI Preview</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: #111;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    font-family: 'Consolas', 'Courier New', monospace;
+    padding: 40px 20px;
+  }
+
+  /* ── App Window ── */
+  .app-window {
+    width: 1100px;
+    height: 750px;
+    background: #020203;
+    border-radius: 6px;
+    overflow: hidden;
+    position: relative;
+    box-shadow: 0 40px 120px rgba(0,0,0,0.9), 0 0 0 1px #2D1550;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── Title Bar ── */
+  .titlebar {
+    height: 32px;
+    background: #08010F;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 0 0 12px;
+    flex-shrink: 0;
+    border-bottom: 1px solid #2D1550;
+  }
+
+  .titlebar-title {
+    color: #9E9E9E;
+    font-size: 11px;
+    letter-spacing: 0.3px;
+  }
+
+  .titlebar-btns {
+    display: flex;
+    height: 100%;
+  }
+
+  .win-btn {
+    width: 46px;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #9E9E9E;
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.15s;
+    user-select: none;
+  }
+
+  .win-btn:hover { background: #1A0A30; }
+  .win-btn.close:hover { background: #c42b1c; color: #fff; }
+
+  /* ── Canvas area ── */
+  .canvas-area {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+  }
+
+  /* Radial gradient background: #0A0310 center → #000000 edge */
+  .canvas-bg {
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(ellipse at 50% 50%, #0A0310 0%, #03010A 45%, #000000 100%);
+  }
+
+  /* ── Floating Toolbar Pill ── */
+  .toolbar-pill {
+    position: absolute;
+    top: 16px;
+    left: 16px;
+    background: #120920;
+    border-radius: 10px;
+    padding: 6px 8px;
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    /* Double border: inner purple + outer dim glow */
+    box-shadow:
+      0 0 0 1px #7C3AED,
+      0 0 0 3px rgba(61, 26, 112, 0.6),
+      0 8px 32px rgba(124, 58, 237, 0.15);
+  }
+
+  /* ── Buttons ── */
+  .btn {
+    padding: 6px 14px;
+    border-radius: 6px;
+    font-family: 'Microsoft YaHei', 'Arial', sans-serif;
+    font-size: 12px;
+    font-weight: bold;
+    cursor: pointer;
+    border: none;
+    transition: background 0.15s, box-shadow 0.15s;
+    white-space: nowrap;
+  }
+
+  .btn-disabled {
+    background: #1A0A30;
+    color: #4A2A6A;
+    cursor: default;
+  }
+
+  .btn-import {
+    background: #7C3AED;
+    color: #fff;
+    box-shadow: 0 0 12px rgba(124, 58, 237, 0.4);
+  }
+  .btn-import:hover {
+    background: #9333EA;
+    box-shadow: 0 0 18px rgba(147, 51, 234, 0.6);
+  }
+
+  .btn-run {
+    background: #00E676;
+    color: #062512;
+    box-shadow: 0 0 12px rgba(0, 230, 118, 0.3);
+  }
+  .btn-run:hover {
+    background: #00c766;
+    box-shadow: 0 0 18px rgba(0, 199, 102, 0.5);
+  }
+
+  .btn-toggle {
+    background: #1A0A30;
+    color: #9E9E9E;
+  }
+  .btn-toggle:hover { background: #2D1050; }
+
+  /* ── Empty State ── */
+  .empty-state {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    text-align: center;
+  }
+
+  .empty-box {
+    width: 400px;
+    height: 220px;
+    border: 2px dashed #2D1550;
+    border-radius: 4px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+  }
+
+  .camera-icon {
+    opacity: 0.35;
+  }
+
+  .camera-icon svg {
+    width: 48px;
+    height: 48px;
+    stroke: #4A2A6A;
+    fill: none;
+    stroke-width: 1.5;
+  }
+
+  .empty-hint {
+    color: #4A2A6A;
+    font-size: 13px;
+  }
+
+  .empty-sub {
+    color: #2D1550;
+    font-size: 11px;
+    letter-spacing: 0.5px;
+  }
+
+  /* ── Status Pill ── */
+  .status-pill {
+    position: absolute;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: #120920;
+    border-radius: 999px;
+    padding: 7px 18px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    box-shadow:
+      0 0 0 1px #7C3AED,
+      0 0 0 3px rgba(61, 26, 112, 0.6),
+      0 8px 32px rgba(124, 58, 237, 0.12);
+    white-space: nowrap;
+  }
+
+  .status-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .dot-dim   { background: #4A2A6A; }
+  .dot-pur   { background: #7C3AED; box-shadow: 0 0 6px #7C3AED; }
+  .dot-green { background: #00E676; box-shadow: 0 0 6px #00E676; }
+  .dot-amber { background: #FFD600; box-shadow: 0 0 6px #FFD600;
+               animation: pulse-amber 0.8s ease-in-out infinite alternate; }
+
+  @keyframes pulse-amber {
+    from { box-shadow: 0 0 4px #FFD600; }
+    to   { box-shadow: 0 0 12px #FFD600; opacity: 0.7; }
+  }
+
+  .status-text {
+    color: #9E9E9E;
+    font-size: 11px;
+    letter-spacing: 0.3px;
+  }
+
+  /* ── Spinner Card ── */
+  .spinner-card {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: #08010F;
+    border-radius: 8px;
+    width: 300px;
+    height: 64px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 0 16px;
+    box-shadow: 0 0 0 1px #7C3AED, 0 8px 32px rgba(124,58,237,0.2);
+  }
+
+  .spinner-ring {
+    width: 32px;
+    height: 32px;
+    flex-shrink: 0;
+    position: relative;
+  }
+
+  .spinner-ring svg {
+    width: 32px;
+    height: 32px;
+    animation: spin 0.8s linear infinite;
+  }
+
+  @keyframes spin {
+    from { transform: rotate(0deg); }
+    to   { transform: rotate(360deg); }
+  }
+
+  .spinner-track {
+    stroke: #1e1e38;
+    stroke-width: 4;
+    fill: none;
+  }
+
+  .spinner-arc {
+    stroke: #7C3AED;
+    stroke-width: 4;
+    fill: none;
+    stroke-linecap: round;
+    stroke-dasharray: 40 80;
+  }
+
+  .spinner-text { display: flex; flex-direction: column; gap: 4px; }
+  .spinner-main { color: #E0E0E0; font-size: 11px; font-weight: bold; font-family: Arial, sans-serif; }
+  .spinner-sub  { color: #4A2A6A; font-size: 10px; }
+
+  /* ── Section Labels ── */
+  .section-label {
+    position: absolute;
+    top: 8px;
+    right: 16px;
+    color: #2D1550;
+    font-size: 10px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+  }
+
+  /* ── Dividers for demo states ── */
+  .demo-row {
+    display: flex;
+    gap: 32px;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+
+  .demo-panel {
+    background: #020203;
+    border: 1px solid #2D1550;
+    border-radius: 8px;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-width: 220px;
+  }
+
+  .demo-label {
+    color: #4A2A6A;
+    font-size: 10px;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #1A0A30;
+  }
+
+  /* ── Full preview page ── */
+  .preview-page {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 48px;
+    width: 100%;
+    max-width: 1200px;
+  }
+
+  .page-title {
+    color: #4A2A6A;
+    font-size: 11px;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    text-align: center;
+  }
+
+  .page-title span {
+    color: #7C3AED;
+  }
+</style>
+</head>
+<body>
+<div class="preview-page">
+
+  <div class="page-title">CellAppCP3 · <span>UI Preview</span> · Modern Dark Cinema + Glassmorphism</div>
+
+  <!-- ── Full App Window ── -->
+  <div class="app-window">
+
+    <!-- Title Bar -->
+    <div class="titlebar">
+      <span class="titlebar-title">CellAppCP3 — Cellpose v3.0</span>
+      <div class="titlebar-btns">
+        <div class="win-btn">─</div>
+        <div class="win-btn">□</div>
+        <div class="win-btn close">✕</div>
+      </div>
+    </div>
+
+    <!-- Canvas Area: Empty State -->
+    <div class="canvas-area" id="state-empty">
+      <div class="canvas-bg"></div>
+
+      <!-- Floating Toolbar: initial disabled state -->
+      <div class="toolbar-pill">
+        <button class="btn btn-disabled">　导入图片　</button>
+        <button class="btn btn-disabled">　细胞识别　</button>
+      </div>
+
+      <!-- Empty state -->
+      <div class="empty-state">
+        <div class="empty-box">
+          <div class="camera-icon">
+            <svg viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
+              <rect x="4" y="14" width="40" height="28" rx="3"/>
+              <circle cx="24" cy="28" r="8"/>
+              <path d="M16 14 L20 8 H28 L32 14"/>
+            </svg>
+          </div>
+          <div class="empty-hint">点击 "导入图片" 开始</div>
+          <div class="empty-sub">.tif · .tiff · .png · 2048 × 1080</div>
+        </div>
+      </div>
+
+      <!-- Status Pill: ready -->
+      <div class="status-pill">
+        <div class="status-dot dot-dim"></div>
+        <span class="status-text">准备就绪</span>
+      </div>
+
+      <div class="section-label">STATE: IDLE</div>
+    </div>
+
+  </div>
+
+  <!-- ── Component States Row ── -->
+  <div class="demo-row">
+
+    <!-- Toolbar States -->
+    <div class="demo-panel">
+      <div class="demo-label">Toolbar · States</div>
+
+      <!-- Disabled -->
+      <div style="display:flex;gap:6px;background:#120920;padding:6px 8px;border-radius:10px;box-shadow:0 0 0 1px #7C3AED,0 0 0 3px rgba(61,26,112,0.6);">
+        <button class="btn btn-disabled">　导入图片　</button>
+        <button class="btn btn-disabled">　细胞识别　</button>
+      </div>
+      <div class="demo-label" style="border:none;padding:0;font-size:9px;">↑ disabled (model loading)</div>
+
+      <!-- Import active -->
+      <div style="display:flex;gap:6px;background:#120920;padding:6px 8px;border-radius:10px;box-shadow:0 0 0 1px #7C3AED,0 0 0 3px rgba(61,26,112,0.6);">
+        <button class="btn btn-import">　导入图片　</button>
+        <button class="btn btn-disabled">　细胞识别　</button>
+      </div>
+      <div class="demo-label" style="border:none;padding:0;font-size:9px;">↑ model ready, no image</div>
+
+      <!-- Both active + toggle -->
+      <div style="display:flex;gap:6px;background:#120920;padding:6px 8px;border-radius:10px;box-shadow:0 0 0 1px #7C3AED,0 0 0 3px rgba(61,26,112,0.6);">
+        <button class="btn btn-import">　导入图片　</button>
+        <button class="btn btn-run">　细胞识别　</button>
+        <button class="btn btn-toggle">　原图　</button>
+      </div>
+      <div class="demo-label" style="border:none;padding:0;font-size:9px;">↑ analysis done + toggle visible</div>
+    </div>
+
+    <!-- Status Pills -->
+    <div class="demo-panel">
+      <div class="demo-label">Status Pill · States</div>
+
+      <div class="status-pill" style="position:static;transform:none;bottom:auto;left:auto;">
+        <div class="status-dot dot-dim"></div>
+        <span class="status-text">准备就绪</span>
+      </div>
+
+      <div class="status-pill" style="position:static;transform:none;bottom:auto;left:auto;">
+        <div class="status-dot dot-amber"></div>
+        <span class="status-text" style="color:#FFD600;">正在加载模型...</span>
+      </div>
+
+      <div class="status-pill" style="position:static;transform:none;bottom:auto;left:auto;">
+        <div class="status-dot dot-pur"></div>
+        <span class="status-text" style="color:#E0E0E0;">图片载入成功</span>
+      </div>
+
+      <div class="status-pill" style="position:static;transform:none;bottom:auto;left:auto;">
+        <div class="status-dot dot-amber"></div>
+        <span class="status-text" style="color:#FFD600;">正在分析中...</span>
+      </div>
+
+      <div class="status-pill" style="position:static;transform:none;bottom:auto;left:auto;">
+        <div class="status-dot dot-green"></div>
+        <span class="status-text" style="color:#00E676;">完成 · #1 (512, 384)  亮度=218</span>
+      </div>
+    </div>
+
+    <!-- Spinner Card -->
+    <div class="demo-panel">
+      <div class="demo-label">Spinner Card</div>
+
+      <div class="spinner-card" style="position:static;transform:none;">
+        <div class="spinner-ring">
+          <svg viewBox="0 0 32 32">
+            <circle class="spinner-track" cx="16" cy="16" r="12"/>
+            <circle class="spinner-arc" cx="16" cy="16" r="12"/>
+          </svg>
+        </div>
+        <div class="spinner-text">
+          <div class="spinner-main">Cellpose v3.0 分析中</div>
+          <div class="spinner-sub">model: cyto3</div>
+        </div>
+      </div>
+
+      <div class="spinner-card" style="position:static;transform:none;">
+        <div class="spinner-ring">
+          <svg viewBox="0 0 32 32">
+            <circle class="spinner-track" cx="16" cy="16" r="12"/>
+            <circle class="spinner-arc" cx="16" cy="16" r="12"/>
+          </svg>
+        </div>
+        <div class="spinner-text">
+          <div class="spinner-main">正在加载 Cellpose v3.0 模型</div>
+          <div class="spinner-sub">首次启动需要几秒，请稍候</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Color Tokens -->
+    <div class="demo-panel">
+      <div class="demo-label">Color Tokens</div>
+      <div style="display:flex;flex-direction:column;gap:8px;">
+        <div style="display:flex;align-items:center;gap:10px;">
+          <div style="width:28px;height:28px;border-radius:4px;background:#020203;border:1px solid #2D1550;flex-shrink:0;"></div>
+          <span style="color:#4A2A6A;font-size:10px;">BG_WIN #020203</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;">
+          <div style="width:28px;height:28px;border-radius:4px;background:#08010F;border:1px solid #2D1550;flex-shrink:0;"></div>
+          <span style="color:#4A2A6A;font-size:10px;">BG_TITLEBAR #08010F</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;">
+          <div style="width:28px;height:28px;border-radius:4px;background:#120920;border:1px solid #2D1550;flex-shrink:0;"></div>
+          <span style="color:#4A2A6A;font-size:10px;">TOOLBAR_BG #120920</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;">
+          <div style="width:28px;height:28px;border-radius:4px;background:#2D1550;flex-shrink:0;"></div>
+          <span style="color:#4A2A6A;font-size:10px;">BORDER #2D1550</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;">
+          <div style="width:28px;height:28px;border-radius:4px;background:#7C3AED;flex-shrink:0;box-shadow:0 0 8px rgba(124,58,237,0.6);"></div>
+          <span style="color:#4A2A6A;font-size:10px;">ACCENT_PUR #7C3AED</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;">
+          <div style="width:28px;height:28px;border-radius:4px;background:#9333EA;flex-shrink:0;box-shadow:0 0 8px rgba(147,51,234,0.6);"></div>
+          <span style="color:#4A2A6A;font-size:10px;">ACCENT_PUR_H #9333EA</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;">
+          <div style="width:28px;height:28px;border-radius:4px;background:#00E676;flex-shrink:0;box-shadow:0 0 8px rgba(0,230,118,0.5);"></div>
+          <span style="color:#4A2A6A;font-size:10px;">ACCENT_GREEN #00E676</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;">
+          <div style="width:28px;height:28px;border-radius:4px;background:#1A0A30;border:1px solid #2D1550;flex-shrink:0;"></div>
+          <span style="color:#4A2A6A;font-size:10px;">BTN_DISABLED #1A0A30</span>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;">
+          <div style="width:28px;height:28px;border-radius:4px;background:#4A2A6A;flex-shrink:0;"></div>
+          <span style="color:#4A2A6A;font-size:10px;">TEXT_DIM #4A2A6A</span>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- end demo-row -->
+
+</div><!-- end preview-page -->
+</body>
+</html>
