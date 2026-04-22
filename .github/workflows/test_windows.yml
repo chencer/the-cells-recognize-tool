@@ -32,6 +32,9 @@ jobs:
     - name: Run headless cell detection test
       run: python test_headless.py
 
+    - name: Run two-pass diameter test
+      run: python test_twopass.py
+
     - name: Upload result image
       uses: actions/upload-artifact@v4
       with:
