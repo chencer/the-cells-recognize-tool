@@ -249,6 +249,7 @@ class CellAppCP3:
 
         self._build_floating_toolbar()
         self._build_status_pill()
+        self._build_data_panel()
 
     def _on_canvas_configure(self, event):
         self._update_bg_gradient()
@@ -564,12 +565,14 @@ class CellAppCP3:
             self.display_image(self.raw_image)
             self._enable_run_btn()
             self._hide_save_btn()
+            self._hide_data_panel()
             self._set_status('图片载入成功', TEXT_PRI, ACCENT_PUR)
 
     def run_analysis(self):
         if self.raw_image is None:
             return
         self._hide_toggle_btn()
+        self._hide_data_panel()
         self.result_img = None
         self.import_btn.config(state='disabled')
         self.run_btn.config(state='disabled')
@@ -747,8 +750,8 @@ class CellAppCP3:
                 cv2.putText(res_img, str(idx), (cx + 6, cy - 6),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (220, 220, 220), 1)
 
-            # Ring overlay for top-3: darken outer 20% annulus (alpha=0.4 darkening)
-            for cell in top3:
+            # Ring overlay for ALL valid cells: darken outer 20% annulus
+            for cell in cell_list:
                 cx, cy = cell["pos"]
                 er_int  = max(1, int(cell["er"]))
                 ir_int  = max(1, int(cell["er"] * 0.8))
@@ -783,6 +786,76 @@ class CellAppCP3:
         self.result_img = res_img
         self.display_image(res_img)
         self._show_toggle_btn()
+        self._show_data_panel(cell_list)
+
+    # ── Data panel (right side) ───────────────────────────────────────────────
+    def _build_data_panel(self):
+        self._data_panel = tk.Frame(self.main_frame, bg=BORDER)
+
+        inner = tk.Frame(self._data_panel, bg=TOOLBAR_BG)
+        inner.pack(fill='both', expand=True, padx=1, pady=1)
+
+        hdr = tk.Frame(inner, bg=TOOLBAR_BG, padx=10, pady=8)
+        hdr.pack(fill='x')
+        self._panel_title = tk.Label(
+            hdr, text='细胞数据', bg=TOOLBAR_BG, fg=ACCENT_PUR, font=UI_FONT)
+        self._panel_title.pack(side='left')
+
+        tk.Frame(inner, bg=BORDER, height=1).pack(fill='x')
+
+        list_outer = tk.Frame(inner, bg=TOOLBAR_BG)
+        list_outer.pack(fill='both', expand=True)
+
+        self._list_canvas = tk.Canvas(
+            list_outer, bg=TOOLBAR_BG, width=244, highlightthickness=0)
+        sb = tk.Scrollbar(list_outer, orient='vertical',
+                          command=self._list_canvas.yview)
+        sb.pack(side='right', fill='y')
+        self._list_canvas.pack(side='left', fill='both', expand=True)
+        self._list_canvas.configure(yscrollcommand=sb.set)
+
+        self._list_inner = tk.Frame(self._list_canvas, bg=TOOLBAR_BG)
+        self._list_win = self._list_canvas.create_window(
+            (0, 0), window=self._list_inner, anchor='nw')
+        self._list_inner.bind('<Configure>', self._on_list_configure)
+
+    def _on_list_configure(self, event):
+        self._list_canvas.configure(
+            scrollregion=self._list_canvas.bbox('all'))
+        self._list_canvas.itemconfig(
+            self._list_win, width=self._list_canvas.winfo_width())
+
+    def _show_data_panel(self, cell_list):
+        for w in self._list_inner.winfo_children():
+            w.destroy()
+
+        self._panel_title.config(text=f'细胞数据  {len(cell_list)} 个')
+
+        for i, cell in enumerate(cell_list, start=1):
+            cx, cy = cell["pos"]
+            bv     = int(cell["brightness"])
+            color  = ACCENT_GREEN if i <= 3 else TEXT_SEC
+
+            row = tk.Frame(self._list_inner, bg=TOOLBAR_BG, pady=3, padx=10)
+            row.pack(fill='x')
+            tk.Label(row, text=f'#{i}', bg=TOOLBAR_BG, fg=color,
+                     font=MONO_FONT, width=3, anchor='w').pack(side='left')
+            tk.Label(row, text=f'({cx}, {cy})', bg=TOOLBAR_BG, fg=TEXT_SEC,
+                     font=MONO_FONT).pack(side='left', padx=(4, 0))
+            tk.Label(row, text=str(bv), bg=TOOLBAR_BG, fg=color,
+                     font=MONO_FONT, anchor='e').pack(side='right')
+
+            if i < len(cell_list):
+                tk.Frame(self._list_inner, bg='#1A0A30', height=1).pack(fill='x')
+
+        row_h   = 26
+        list_h  = min(len(cell_list) * row_h, 400)
+        self._list_canvas.config(height=list_h)
+        self._data_panel.place(relx=1.0, y=16, anchor='ne', x=-16)
+        self._data_panel.lift()
+
+    def _hide_data_panel(self):
+        self._data_panel.place_forget()
 
     # ── Save ──────────────────────────────────────────────────────────────────
     def save_results(self):
