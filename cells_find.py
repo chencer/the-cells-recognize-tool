@@ -509,16 +509,23 @@ class CellAppCP3:
             start=0, extent=70, outline=ACCENT_PUR,
             width=4, style='arc', tags='sp_arc')
 
-        self._spin_cv.create_text(
+        self._spin_text1 = self._spin_cv.create_text(
             56, 26, anchor='w', text=text,
             fill=TEXT_PRI, font=('Arial', 10, 'bold'))
-        self._spin_cv.create_text(
+        self._spin_text2 = self._spin_cv.create_text(
             57, 44, anchor='w', text=subtext,
             fill=TEXT_DIM, font=MONO_FONT)
 
         self._spin_running = True
         self._spin_angle   = 0
         self._tick_spinner()
+
+    def _set_spinner_text(self, text, subtext=''):
+        if hasattr(self, '_spin_cv') and self._spin_cv.winfo_exists():
+            if hasattr(self, '_spin_text1'):
+                self._spin_cv.itemconfig(self._spin_text1, text=text)
+            if hasattr(self, '_spin_text2'):
+                self._spin_cv.itemconfig(self._spin_text2, text=subtext)
 
     def _tick_spinner(self):
         if not self._spin_running:
@@ -560,7 +567,9 @@ class CellAppCP3:
         self._set_status('正在分析中...', ACCENT_YELLOW, ACCENT_YELLOW)
         self._start_scan()
         self._start_pulse()
-        self._build_spinner_card()
+        self._build_spinner_card(
+            text='正在估算细胞直径...',
+            subtext='diameter=0 自动估算')
         while not self._result_queue.empty():
             try:
                 self._result_queue.get_nowait()
@@ -572,13 +581,32 @@ class CellAppCP3:
 
     def _analysis_worker(self):
         try:
+            # Pass 1: estimate diameter
+            masks_est, _, _ = self.model.eval(self.raw_image, diameter=0, channels=[0, 0])
+            from cellpose.utils import diameters
+            diam = float(np.median(diameters(masks_est)))
+            if diam == 0 or np.isnan(diam):
+                diam = 30.0
+            print(f"Cellpose 估算直径: {diam:.1f}px")
+
+            H, W = self.raw_image.shape[:2]
+            short_side = min(H, W)
+            scale = short_side / 1080.0
+            corrected_diam = max(20.0, min(diam * scale, 500.0))
+            print(f"校正后直径: {corrected_diam:.1f}px  (短边={short_side}px, scale={scale:.2f})")
+
+            # Pass 2: segmentation with corrected diameter
+            self.root.after(0, self._set_spinner_text,
+                            '正在分割识别...',
+                            f'diameter={corrected_diam:.1f}px')
+
             masks = self.model.eval(
                 self.raw_image,
-                diameter=120,
+                diameter=corrected_diam,
                 channels=[0, 0],
                 flow_threshold=0.95,
                 cellprob_threshold=1.0,
-                min_size=200,
+                min_size=int(corrected_diam ** 2 * 0.2),
                 resample=True,
             )[0]
             self._result_queue.put(('ok', masks))
@@ -648,6 +676,18 @@ class CellAppCP3:
                 "er": er,
             })
         print(f"[Step1] 完整度过滤后: {len(candidates)} / {total_detected}")
+
+        # ── Step 1b: dark region filter ───────────────────────────────────────
+        filtered_dark = []
+        for c in candidates:
+            pixels = gray[c["mask"] > 0]
+            mean_brightness = float(pixels.mean()) if len(pixels) > 0 else 0.0
+            if mean_brightness < 15:
+                print(f"  [skip-dark] cell {c['cid']}: mean_brightness={mean_brightness:.1f} < 15")
+                continue
+            filtered_dark.append(c)
+        candidates = filtered_dark
+        print(f"[Step1b] 暗区过滤后: {len(candidates)}")
 
         # ── Step 2: area ──────────────────────────────────────────────────────
         if candidates:
