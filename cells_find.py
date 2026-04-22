@@ -34,7 +34,8 @@ TEXT_SEC      = '#9E9E9E'
 TEXT_DIM      = '#4A2A6A'
 GLOW_BORDER   = '#7C3AED'
 
-PANEL_W = 280  # fixed right-panel pixel width
+PANEL_W      = 280  # fixed right-panel pixel width
+PANEL_FONT   = ('Courier New', 10)
 
 if sys.platform == 'win32':
     UI_FONT   = ('Microsoft YaHei', 9, 'bold')
@@ -42,15 +43,6 @@ if sys.platform == 'win32':
 else:
     UI_FONT   = ('Arial', 9, 'bold')
     MONO_FONT = ('Courier New', 9)
-
-# Column definitions for data panel: (header, pixel_width, anchor)
-_PANEL_COLS = [
-    ('排名',   40, 'e'),
-    ('X',      52, 'e'),
-    ('Y',      52, 'e'),
-    ('直径px', 58, 'e'),
-    ('亮度',   46, 'e'),
-]
 
 
 def get_resource_path(relative_path):
@@ -74,18 +66,6 @@ def _smooth_pill(canvas, x1, y1, x2, y2, r, fill, outline, tag=''):
         kw['tags'] = tag
     canvas.create_polygon(pts, **kw)
 
-
-def _col_row(parent, values, colors, bg):
-    """Build one table row with fixed-width columns."""
-    row = tk.Frame(parent, bg=bg, pady=5, padx=6)
-    row.pack(fill='x')
-    for (_, pw, anc), val, fg in zip(_PANEL_COLS, values, colors):
-        cell = tk.Frame(row, bg=bg, width=pw)
-        cell.pack(side='left')
-        cell.pack_propagate(False)
-        tk.Label(cell, text=val, bg=bg, fg=fg,
-                 font=MONO_FONT, anchor=anc).pack(fill='both', expand=True)
-    return row
 
 
 class CellAppCP3:
@@ -796,68 +776,68 @@ class CellAppCP3:
 
         tk.Frame(self.right_frame, bg=BORDER, height=1).pack(fill='x', side='top')
 
-        # Column header row
-        hdr = tk.Frame(self.right_frame, bg=PANEL_HDR_BG, pady=6, padx=6)
-        hdr.pack(fill='x', side='top')
-        for col_text, pw, anc in _PANEL_COLS:
-            cell = tk.Frame(hdr, bg=PANEL_HDR_BG, width=pw)
-            cell.pack(side='left')
-            cell.pack_propagate(False)
-            tk.Label(cell, text=col_text, bg=PANEL_HDR_BG, fg=ACCENT_PUR,
-                     font=UI_FONT, anchor=anc).pack(fill='both', expand=True)
+        # Text widget + scrollbar
+        text_area = tk.Frame(self.right_frame, bg=BG_TITLEBAR)
+        text_area.pack(fill='both', expand=True, side='top')
 
-        tk.Frame(self.right_frame, bg=BORDER, height=1).pack(fill='x', side='top')
-
-        # Scrollable data area
-        scroll_outer = tk.Frame(self.right_frame, bg=PANEL_BG)
-        scroll_outer.pack(fill='both', expand=True, side='top')
-
-        self._list_canvas = tk.Canvas(
-            scroll_outer, bg=PANEL_BG, highlightthickness=0)
-        sb = tk.Scrollbar(scroll_outer, orient='vertical',
-                          command=self._list_canvas.yview)
+        sb = tk.Scrollbar(text_area, orient='vertical')
         sb.pack(side='right', fill='y')
-        self._list_canvas.pack(side='left', fill='both', expand=True)
-        self._list_canvas.configure(yscrollcommand=sb.set)
 
-        self._list_inner = tk.Frame(self._list_canvas, bg=PANEL_BG)
-        self._list_win = self._list_canvas.create_window(
-            (0, 0), window=self._list_inner, anchor='nw')
-        self._list_inner.bind('<Configure>', self._on_list_configure)
+        self._data_text = tk.Text(
+            text_area,
+            font=PANEL_FONT,
+            bg=BG_TITLEBAR,
+            fg=TEXT_SEC,
+            state='disabled',
+            relief='flat',
+            bd=0,
+            highlightthickness=0,
+            cursor='arrow',
+            wrap='none',
+            spacing1=3,
+            spacing3=3,
+            yscrollcommand=sb.set,
+        )
+        self._data_text.pack(side='left', fill='both', expand=True, padx=6)
+        sb.config(command=self._data_text.yview)
+
+        self._data_text.tag_configure(
+            'header', foreground=ACCENT_PUR,
+            font=(PANEL_FONT[0], PANEL_FONT[1], 'bold'))
+        self._data_text.tag_configure('sep',    foreground=TEXT_DIM)
+        self._data_text.tag_configure('top3',   foreground=ACCENT_GREEN)
+        self._data_text.tag_configure('normal', foreground=TEXT_SEC)
 
         self._panel_show_empty()
 
-    def _on_list_configure(self, event):
-        self._list_canvas.configure(scrollregion=self._list_canvas.bbox('all'))
-        self._list_canvas.itemconfig(
-            self._list_win, width=self._list_canvas.winfo_width())
-
     def _panel_show_empty(self):
-        for w in self._list_inner.winfo_children():
-            w.destroy()
         self._panel_title.config(text='细胞数据')
-        tk.Label(self._list_inner, text='等待识别...',
-                 bg=PANEL_BG, fg=TEXT_DIM, font=MONO_FONT,
-                 pady=24).pack()
+        self._data_text.config(state='normal')
+        self._data_text.delete('1.0', 'end')
+        self._data_text.insert('end', '\n  等待识别...', 'normal')
+        self._data_text.config(state='disabled')
 
     def _panel_populate(self, cell_list):
-        for w in self._list_inner.winfo_children():
-            w.destroy()
         self._panel_title.config(text=f'细胞数据  {len(cell_list)} 个')
+        self._data_text.config(state='normal')
+        self._data_text.delete('1.0', 'end')
+
+        hdr = (f"{'排名':<4} {'坐标X':<7} {'坐标Y':<7}"
+               f" {'直径px':<8} {'亮度':<6}")
+        self._data_text.insert('end', hdr + '\n', 'header')
+        self._data_text.insert('end', '─' * 38 + '\n', 'sep')
 
         for i, cell in enumerate(cell_list, start=1):
             cx, cy = cell["pos"]
             bv     = int(cell["brightness"])
             diam   = f'{cell["er"] * 2:.1f}'
-            color  = ACCENT_GREEN if i <= 3 else TEXT_SEC
-            bg_row = '#0A0420' if i % 2 == 0 else PANEL_BG
+            rank   = f'#{i}'
+            line   = (f"{rank:<4} {cx:<7} {cy:<7}"
+                      f" {diam:<8} {bv:<6}")
+            tag    = 'top3' if i <= 3 else 'normal'
+            self._data_text.insert('end', line + '\n', tag)
 
-            vals   = [f'#{i}', str(cx), str(cy), diam, str(bv)]
-            colors = [color] * 5
-            _col_row(self._list_inner, vals, colors, bg_row)
-
-            if i < len(cell_list):
-                tk.Frame(self._list_inner, bg='#1A0A30', height=1).pack(fill='x')
+        self._data_text.config(state='disabled')
 
     # ── Save ──────────────────────────────────────────────────────────────────
     def save_results(self):
