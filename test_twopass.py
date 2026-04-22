@@ -26,7 +26,7 @@ print(f"Model loaded  GPU={use_gpu}")
 # Pass 1
 print("Pass 1: estimating diameter...")
 masks_est, _, _ = model.eval(img, diameter=0, channels=[0, 0])
-diam = float(np.median(cp_diameters(masks_est)))
+diam = float(cp_diameters(masks_est)[0])  # returns (median, per_cell_array)
 if diam == 0 or np.isnan(diam):
     diam = 30.0
 print(f"Cellpose 估算直径: {diam:.1f}px")

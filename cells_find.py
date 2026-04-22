@@ -584,7 +584,7 @@ class CellAppCP3:
             # Pass 1: estimate diameter
             masks_est, _, _ = self.model.eval(self.raw_image, diameter=0, channels=[0, 0])
             from cellpose.utils import diameters
-            diam = float(np.median(diameters(masks_est)))
+            diam = float(diameters(masks_est)[0])  # returns (median, per_cell_array)
             if diam == 0 or np.isnan(diam):
                 diam = 30.0
             print(f"Cellpose 估算直径: {diam:.1f}px")
