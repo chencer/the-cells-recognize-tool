@@ -1,5 +1,13 @@
 # Changelog
 
+## v2.1.0 — 2026-04-22
+
+- feat: 状态栏新增细胞总数统计，格式 `完成 · 检测: XX / 有效: XX · #1 (x, y) 亮度=XXX`
+- feat: 保存按钮，分析完成后出现在工具栏，导入新图时自动隐藏
+- feat: 保存输出 `细胞数据/原文件名/` 目录，包含结果图、top3 坐标、所有细胞直径数据
+- feat: Top 3 标注格式改为 `序号 · 亮度值`（如 `1 · 247`）
+- feat: 其余有效细胞标注白色小字编号（从 4 开始）
+
 ## v2.0.0 — 2026-04-22
 
 - redesign: OLED dark cinema + glassmorphism 全局视觉重设计
@@ -8,7 +16,6 @@
 - feat: 异步加载 Cellpose 模型，启动时显示进度动画
 - feat: Windows 原生风格标题栏 + 浮动工具栏
 - fix: queue 轮询机制修复，消除 UI 线程阻塞
-- docs: 整理仓库文档（README、CHANGELOG、debug_summary）
 
 ## v1.2.0 — 2026-04-21
 
