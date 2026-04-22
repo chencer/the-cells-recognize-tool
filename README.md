@@ -1,6 +1,6 @@
 # The Cells Recognize Tool
 
-基于 **Cellpose cyto3** 模型的荧光细胞图像分割与亮度排名桌面工具。当前版本：**v2.1.0**
+基于 **Cellpose cyto3** 模型的荧光细胞图像分割与亮度排名桌面工具。当前版本：**v2.0.0**
 
 ---
 
@@ -62,7 +62,7 @@ python cells_find.py
 ```
 cells_find.py         # 主程序（UI + 分析逻辑）
 cells_recognize.py    # 开发版（无 UI，直接调用 cellpose）
-cyto3                 # 本地 Cellpose cyto3 模型权重（CP3 格式）
+cyto3                 # 本地 Cellpose cyto3 模型权重
 requirements.txt      # 依赖列表
 .github/workflows/    # GitHub Actions 自动打包 .exe
 ```
@@ -82,16 +82,6 @@ pip install -r requirements.txt
 | torch | ≥ 2.0 |
 | ttkbootstrap | ≥ 1.10 |
 | Pillow | ≥ 10.0 |
-
----
-
-## Releases
-
-- [v2.1.0](https://github.com/chencer/the-cells-recognize-tool/releases/tag/v2.1.0)
-- [v1.4.0](https://github.com/chencer/the-cells-recognize-tool/releases/tag/v1.4.0)
-- [v1.3.0](https://github.com/chencer/the-cells-recognize-tool/releases/tag/v1.3.0)
-- [v1.2.0](https://github.com/chencer/the-cells-recognize-tool/releases/tag/v1.2.0)
-- [v1.1.0](https://github.com/chencer/the-cells-recognize-tool/releases/tag/v1.1.0)
 
 ---
 
