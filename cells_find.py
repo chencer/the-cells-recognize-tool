@@ -21,6 +21,8 @@ except ImportError:
 BG_WIN        = '#020203'
 BG_TITLEBAR   = '#08010F'
 TOOLBAR_BG    = '#120920'
+PANEL_BG      = '#0D0718'
+PANEL_HDR_BG  = '#0A0520'
 BORDER        = '#2D1550'
 ACCENT_PUR    = '#7C3AED'
 ACCENT_PUR_H  = '#9333EA'
@@ -30,7 +32,9 @@ ACCENT_YELLOW = '#FFD600'
 TEXT_PRI      = '#E0E0E0'
 TEXT_SEC      = '#9E9E9E'
 TEXT_DIM      = '#4A2A6A'
-GLOW_BORDER   = '#7C3AED'  # rgba(124,58,237,0.4) approximated as solid for canvas
+GLOW_BORDER   = '#7C3AED'
+
+PANEL_W = 280  # fixed right-panel pixel width
 
 if sys.platform == 'win32':
     UI_FONT   = ('Microsoft YaHei', 9, 'bold')
@@ -38,6 +42,15 @@ if sys.platform == 'win32':
 else:
     UI_FONT   = ('Arial', 9, 'bold')
     MONO_FONT = ('Courier New', 9)
+
+# Column definitions for data panel: (header, pixel_width, anchor)
+_PANEL_COLS = [
+    ('排名',   40, 'e'),
+    ('X',      52, 'e'),
+    ('Y',      52, 'e'),
+    ('直径px', 58, 'e'),
+    ('亮度',   46, 'e'),
+]
 
 
 def get_resource_path(relative_path):
@@ -47,7 +60,6 @@ def get_resource_path(relative_path):
 
 
 def _smooth_pill(canvas, x1, y1, x2, y2, r, fill, outline, tag=''):
-    """Smooth rounded rectangle using polygon smooth=True."""
     r = min(r, (x2 - x1) // 2, (y2 - y1) // 2)
     pts = [
         x1+r, y1,   x2-r, y1,
@@ -61,6 +73,19 @@ def _smooth_pill(canvas, x1, y1, x2, y2, r, fill, outline, tag=''):
     if tag:
         kw['tags'] = tag
     canvas.create_polygon(pts, **kw)
+
+
+def _col_row(parent, values, colors, bg):
+    """Build one table row with fixed-width columns."""
+    row = tk.Frame(parent, bg=bg, pady=5, padx=6)
+    row.pack(fill='x')
+    for (_, pw, anc), val, fg in zip(_PANEL_COLS, values, colors):
+        cell = tk.Frame(row, bg=bg, width=pw)
+        cell.pack(side='left')
+        cell.pack_propagate(False)
+        tk.Label(cell, text=val, bg=bg, fg=fg,
+                 font=MONO_FONT, anchor=anc).pack(fill='both', expand=True)
+    return row
 
 
 class CellAppCP3:
@@ -85,14 +110,13 @@ class CellAppCP3:
         self._result_queue = queue.Queue()
         self._model_queue  = queue.Queue()
 
-        self.result_img       = None   # annotated result image
-        self._showing_result  = True   # toggle state
-        self.image_path       = None   # path of last loaded image
-        self.cell_list        = None   # sorted cell list from last analysis
+        self.result_img      = None
+        self._showing_result = True
+        self.image_path      = None
+        self.cell_list       = None
 
         self._setup_window()
         self.setup_ui()
-        # Defer model loading until after UI is visible
         self.root.after(120, self._start_model_load)
 
     # ── Window ────────────────────────────────────────────────────────────────
@@ -102,7 +126,7 @@ class CellAppCP3:
         self.root.update_idletasks()
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
-        self.root.geometry(f"1100x750+{(sw-1100)//2}+{(sh-750)//2}")
+        self.root.geometry(f"1400x750+{(sw-1400)//2}+{(sh-750)//2}")
 
     def _start_drag(self, event):
         self._drag_ox = event.x_root - self.root.winfo_x()
@@ -119,18 +143,6 @@ class CellAppCP3:
             self.root.overrideredirect(True)
             self.root.unbind('<Map>')
         self.root.bind('<Map>', _restore)
-
-    def _toggle_maximize(self):
-        is_zoomed = getattr(self, '_maximized', False)
-        if is_zoomed:
-            self.root.geometry(self._pre_max_geo)
-            self._maximized = False
-        else:
-            self._pre_max_geo = self.root.geometry()
-            sw = self.root.winfo_screenwidth()
-            sh = self.root.winfo_screenheight()
-            self.root.geometry(f"{sw}x{sh}+0+0")
-            self._maximized = True
 
     # ── Model loading ─────────────────────────────────────────────────────────
     def _start_model_load(self):
@@ -198,22 +210,19 @@ class CellAppCP3:
     def setup_ui(self):
         self._build_titlebar()
         self._build_main_area()
-        # Defer pill sizing until window is drawn
         self.root.after(80, self._update_toolbar_pill)
         self.root.after(80, self._update_status_pill)
 
-    # ── Title bar (Windows style) ─────────────────────────────────────────────
+    # ── Title bar ─────────────────────────────────────────────────────────────
     def _build_titlebar(self):
         bar = tk.Frame(self.root, height=32, bg=BG_TITLEBAR)
         bar.pack(fill='x', side='top')
         bar.pack_propagate(False)
 
-        # Left: app title
         tk.Label(bar, text='CellAppCP3 — Cellpose v3.0',
                  bg=BG_TITLEBAR, fg=TEXT_SEC,
                  font=MONO_FONT).place(x=12, rely=0.5, anchor='w')
 
-        # Right: ─  □  ✕
         def _winbtn(parent, text, hover, cmd):
             b = tk.Label(parent, text=text, bg=BG_TITLEBAR, fg=TEXT_SEC,
                          font=('Arial', 11), width=3, cursor='hand2')
@@ -227,23 +236,30 @@ class CellAppCP3:
         btn_row.place(relx=1.0, rely=0.5, anchor='e')
 
         _winbtn(btn_row, '─', '#1A0A30', self._minimize)
-        _winbtn(btn_row, '□', '#1A0A30', self._toggle_maximize)
         _winbtn(btn_row, '✕', '#c42b1c', self.root.destroy)
 
-        # Separator
         tk.Frame(self.root, bg=BORDER, height=1).pack(fill='x', side='top')
 
-        # Drag (exclude button area)
         bar.bind('<ButtonPress-1>', self._start_drag)
         bar.bind('<B1-Motion>',     self._do_drag)
 
-    # ── Main area ─────────────────────────────────────────────────────────────
+    # ── Main area: left canvas + right panel ──────────────────────────────────
     def _build_main_area(self):
         self.main_frame = tk.Frame(self.root, bg=BG_WIN)
         self.main_frame.pack(fill='both', expand=True)
 
-        self.canvas = tk.Canvas(self.main_frame, bg=BG_WIN,
-                                highlightthickness=0)
+        # Right panel (fixed width, packed first so canvas fills remainder)
+        tk.Frame(self.main_frame, bg=BORDER, width=1).pack(side='right', fill='y')
+        self.right_frame = tk.Frame(
+            self.main_frame, bg=PANEL_BG, width=PANEL_W)
+        self.right_frame.pack(side='right', fill='y')
+        self.right_frame.pack_propagate(False)
+
+        # Left canvas area
+        self.left_frame = tk.Frame(self.main_frame, bg=BG_WIN)
+        self.left_frame.pack(side='left', fill='both', expand=True)
+
+        self.canvas = tk.Canvas(self.left_frame, bg=BG_WIN, highlightthickness=0)
         self.canvas.pack(fill='both', expand=True)
         self.canvas.bind('<Configure>', self._on_canvas_configure)
 
@@ -270,7 +286,6 @@ class CellAppCP3:
             np.sqrt((xx - cx)**2 + (yy - cy)**2) / (max(w, h) * 0.75),
             0, 1)
 
-        # Center: #0A0310 → Edge: #000000
         r = (0x0A * (1 - dist)).astype(np.uint8)
         g = (0x03 * (1 - dist)).astype(np.uint8)
         b = (0x10 * (1 - dist)).astype(np.uint8)
@@ -293,13 +308,11 @@ class CellAppCP3:
         cx, cy = w // 2, h // 2
         bw, bh = 400, 220
 
-        # Dashed border
         self.canvas.create_rectangle(
             cx - bw//2, cy - bh//2, cx + bw//2, cy + bh//2,
             outline='#2D1550', dash=(6, 4), width=2, fill='',
             tags='empty_state')
 
-        # Image icon (camera silhouette)
         ix, iy = cx, cy - 28
         self.canvas.create_rectangle(
             ix-22, iy-14, ix+22, iy+14,
@@ -321,14 +334,12 @@ class CellAppCP3:
             cx, cy + 38, text='.tif · .tiff · .png · 2048 × 1080',
             fill='#3e3e4a', font=MONO_FONT, tags='empty_state')
 
-    # ── Floating toolbar pill (top-left) ──────────────────────────────────────
+    # ── Floating toolbar pill (top-left of left_frame) ────────────────────────
     def _build_floating_toolbar(self):
-        self._tb_pill = tk.Canvas(self.main_frame, bg=BG_WIN,
-                                  highlightthickness=0)
+        self._tb_pill = tk.Canvas(self.left_frame, bg=BG_WIN, highlightthickness=0)
         self._tb_pill.place(x=16, y=16)
 
-        self._tb_frame = tk.Frame(self._tb_pill, bg=TOOLBAR_BG,
-                                  padx=6, pady=6)
+        self._tb_frame = tk.Frame(self._tb_pill, bg=TOOLBAR_BG, padx=6, pady=6)
 
         self.import_btn = self._make_btn(
             self._tb_frame, '  导入图片  ',
@@ -342,19 +353,15 @@ class CellAppCP3:
             command=self.run_analysis, state='disabled')
         self.run_btn.pack(side='left')
 
-        # Toggle button — hidden until first analysis completes
         self.toggle_btn = self._make_btn(
             self._tb_frame, '  原图  ',
             '#1A0A30', '#2D1050', TEXT_SEC,
             command=self._toggle_view)
-        # not packed yet
 
-        # Save button — hidden until first analysis completes
         self.save_btn = self._make_btn(
             self._tb_frame, '  保存  ',
             '#0A1A0A', '#1A3020', '#00E676',
             command=self.save_results)
-        # not packed yet
 
     def _update_toolbar_pill(self):
         self._tb_frame.update_idletasks()
@@ -365,23 +372,19 @@ class CellAppCP3:
 
         self._tb_pill.config(width=pw, height=ph)
         self._tb_pill.delete('all')
-        # Outer glow ring
         _smooth_pill(self._tb_pill, 0, 0, pw-1, ph-1, r=12,
                      fill='', outline='#3D1A70')
-        # Inner fill
         _smooth_pill(self._tb_pill, 2, 2, pw-3, ph-3, r=10,
                      fill=TOOLBAR_BG, outline=GLOW_BORDER)
         self._tb_pill.create_window(
             pw // 2, ph // 2, window=self._tb_frame, anchor='center')
 
-    # ── Status pill (bottom center) ───────────────────────────────────────────
+    # ── Status pill (bottom center of left_frame) ─────────────────────────────
     def _build_status_pill(self):
-        self._sb_pill = tk.Canvas(self.main_frame, bg=BG_WIN,
-                                  highlightthickness=0)
+        self._sb_pill = tk.Canvas(self.left_frame, bg=BG_WIN, highlightthickness=0)
         self._sb_pill.place(relx=0.5, rely=1.0, anchor='s', y=-20)
 
-        self._sb_frame = tk.Frame(self._sb_pill, bg=TOOLBAR_BG,
-                                  padx=14, pady=7)
+        self._sb_frame = tk.Frame(self._sb_pill, bg=TOOLBAR_BG, padx=14, pady=7)
 
         self._dot = tk.Canvas(self._sb_frame, width=7, height=7,
                               bg=TOOLBAR_BG, highlightthickness=0)
@@ -400,14 +403,12 @@ class CellAppCP3:
         pad = 5
         pw = fw + 2*pad
         ph = fh + 2*pad
-        r  = ph // 2  # full capsule
+        r  = ph // 2
 
         self._sb_pill.config(width=pw, height=ph)
         self._sb_pill.delete('all')
-        # Outer glow ring
         _smooth_pill(self._sb_pill, 0, 0, pw-1, ph-1, r=r,
                      fill='', outline='#3D1A70')
-        # Inner fill
         _smooth_pill(self._sb_pill, 2, 2, pw-3, ph-3, r=r,
                      fill=TOOLBAR_BG, outline=GLOW_BORDER)
         self._sb_pill.create_window(
@@ -490,7 +491,7 @@ class CellAppCP3:
         if not self._pulse_running:
             return
         self._pulse_t += 0.13
-        a = 0.55 + 0.45 * math.cos(self._pulse_t)  # 0.55–1.0
+        a = 0.55 + 0.45 * math.cos(self._pulse_t)
         r = 0xFF
         g = int(0xD6 * a + 0x60 * (1 - a))
         color = f'#{r:02x}{g:02x}00'
@@ -504,12 +505,12 @@ class CellAppCP3:
     # ── Animation: spinner card ───────────────────────────────────────────────
     def _build_spinner_card(self, text='Cellpose v3.0 分析中',
                             subtext='model: cyto3'):
-        cw = self.canvas.winfo_width()  or 1100
+        cw = self.canvas.winfo_width()  or 820
         ch = self.canvas.winfo_height() or 714
 
         card_w, card_h = 300, 64
         self._spin_cv = tk.Canvas(
-            self.main_frame,
+            self.left_frame,
             width=card_w, height=card_h,
             bg=BG_WIN, highlightthickness=0)
         self._spin_cv.place(
@@ -565,14 +566,14 @@ class CellAppCP3:
             self.display_image(self.raw_image)
             self._enable_run_btn()
             self._hide_save_btn()
-            self._hide_data_panel()
+            self._panel_show_empty()
             self._set_status('图片载入成功', TEXT_PRI, ACCENT_PUR)
 
     def run_analysis(self):
         if self.raw_image is None:
             return
         self._hide_toggle_btn()
-        self._hide_data_panel()
+        self._panel_show_empty()
         self.result_img = None
         self.import_btn.config(state='disabled')
         self.run_btn.config(state='disabled')
@@ -580,7 +581,6 @@ class CellAppCP3:
         self._start_scan()
         self._start_pulse()
         self._build_spinner_card()
-        # Clear any stale result from a previous run
         while not self._result_queue.empty():
             try:
                 self._result_queue.get_nowait()
@@ -655,7 +655,7 @@ class CellAppCP3:
 
             print(f"  cell {cid}: mask={mask_area:.0f}px  hull={hull_comp:.3f}"
                   f"  circle={circle_comp:.3f}  touches={'Y' if touches else 'N'}"
-                  f"  → {method}={completeness:.3f}")
+                  f"  -> {method}={completeness:.3f}")
 
             if completeness < 0.85:
                 print(f"  [skip] cell {cid}: {method}={completeness:.3f} < 0.85")
@@ -665,7 +665,7 @@ class CellAppCP3:
             candidates.append({
                 "cid": cid, "mask": mask, "mask_area": mask_area,
                 "contours": contours, "perimeter": perimeter,
-                "er": er,  # reused in brightness ROI — avoids recomputing minEnclosingCircle
+                "er": er,
             })
         print(f"[Step1] 完整度过滤后: {len(candidates)} / {total_detected}")
 
@@ -692,7 +692,7 @@ class CellAppCP3:
             circ = (4 * math.pi * c["mask_area"] / (c["perimeter"] ** 2)
                     if c["perimeter"] > 0 else 0.0)
             if circ < 0.5:
-                print(f"  [skip-circ] cell {c['cid']}: circularity={circ:.3f} < 0.40")
+                print(f"  [skip-circ] cell {c['cid']}: circularity={circ:.3f} < 0.50")
                 continue
             filtered.append(c)
         candidates = filtered
@@ -708,14 +708,11 @@ class CellAppCP3:
             cx = int(M["m10"] / M["m00"])
             cy = int(M["m01"] / M["m00"])
 
-            # Reuse er stored in step 1 — no extra minEnclosingCircle call
             ir = max(1, int(c["er"] * 0.8))
 
-            # ROI clipped to image bounds
             rx1 = max(0, cx - ir);  ry1 = max(0, cy - ir)
             rx2 = min(W_img, cx + ir + 1);  ry2 = min(H_img, cy + ir + 1)
 
-            # Inner circle mask at ROI size — far smaller than full H×W allocation
             roi_h, roi_w = ry2 - ry1, rx2 - rx1
             inner_mask = np.zeros((roi_h, roi_w), dtype=np.uint8)
             cv2.circle(inner_mask, (cx - rx1, cy - ry1), ir, 1, -1)
@@ -725,14 +722,13 @@ class CellAppCP3:
 
             if len(cell_pixels) > 50:
                 k = max(1, int(len(cell_pixels) * 0.05))
-                # np.partition is O(n); np.sort would be O(n log n)
                 peak = float(np.mean(np.partition(cell_pixels, -k)[-k:]))
                 cell_list.append({
                     "brightness": peak,
                     "pos": (cx, cy),
                     "contours": c["contours"],
-                    "mask": c["mask"],   # needed for ring overlay
-                    "er": c["er"],       # needed for ring overlay
+                    "mask": c["mask"],
+                    "er": c["er"],
                 })
 
         print(f"过滤前细胞数: {total_detected}  最终有效细胞: {len(cell_list)}")
@@ -743,14 +739,14 @@ class CellAppCP3:
             top3   = cell_list[:3]
             others = cell_list[3:]
 
-            # Yellow contours + rank number (4, 5, …) for non-top-3
+            # Yellow contours + rank number for non-top-3
             for idx, cell in enumerate(others, start=4):
                 cx, cy = cell["pos"]
                 cv2.drawContours(res_img, cell["contours"], -1, (0, 255, 255), 2)
                 cv2.putText(res_img, str(idx), (cx + 6, cy - 6),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (220, 220, 220), 1)
 
-            # Ring overlay for ALL valid cells: darken outer 20% annulus
+            # Ring overlay for ALL valid cells
             for cell in cell_list:
                 cx, cy = cell["pos"]
                 er_int  = max(1, int(cell["er"]))
@@ -762,7 +758,7 @@ class CellAppCP3:
                 ring = (outer_m > 0) & (inner_m == 0) & (cell["mask"] > 0)
                 res_img[ring] = (res_img[ring] * 0.6).astype(np.uint8)
 
-            # Green contour + center dot + "rank · brightness" label for top 3
+            # Green contour + center dot + label for top 3
             for rank, cell in enumerate(top3, start=1):
                 cx, cy = cell["pos"]
                 cv2.drawContours(res_img, cell["contours"], -1, (0, 255, 0), 2)
@@ -786,76 +782,82 @@ class CellAppCP3:
         self.result_img = res_img
         self.display_image(res_img)
         self._show_toggle_btn()
-        self._show_data_panel(cell_list)
+        self._panel_populate(cell_list)
 
-    # ── Data panel (right side) ───────────────────────────────────────────────
+    # ── Data panel (fixed right side) ─────────────────────────────────────────
     def _build_data_panel(self):
-        self._data_panel = tk.Frame(self.main_frame, bg=BORDER)
-
-        inner = tk.Frame(self._data_panel, bg=TOOLBAR_BG)
-        inner.pack(fill='both', expand=True, padx=1, pady=1)
-
-        hdr = tk.Frame(inner, bg=TOOLBAR_BG, padx=10, pady=8)
-        hdr.pack(fill='x')
+        # Title row
+        title_row = tk.Frame(self.right_frame, bg=PANEL_BG, padx=12, pady=9)
+        title_row.pack(fill='x', side='top')
         self._panel_title = tk.Label(
-            hdr, text='细胞数据', bg=TOOLBAR_BG, fg=ACCENT_PUR, font=UI_FONT)
+            title_row, text='细胞数据',
+            bg=PANEL_BG, fg=ACCENT_PUR, font=UI_FONT)
         self._panel_title.pack(side='left')
 
-        tk.Frame(inner, bg=BORDER, height=1).pack(fill='x')
+        tk.Frame(self.right_frame, bg=BORDER, height=1).pack(fill='x', side='top')
 
-        list_outer = tk.Frame(inner, bg=TOOLBAR_BG)
-        list_outer.pack(fill='both', expand=True)
+        # Column header row
+        hdr = tk.Frame(self.right_frame, bg=PANEL_HDR_BG, pady=6, padx=6)
+        hdr.pack(fill='x', side='top')
+        for col_text, pw, anc in _PANEL_COLS:
+            cell = tk.Frame(hdr, bg=PANEL_HDR_BG, width=pw)
+            cell.pack(side='left')
+            cell.pack_propagate(False)
+            tk.Label(cell, text=col_text, bg=PANEL_HDR_BG, fg=ACCENT_PUR,
+                     font=UI_FONT, anchor=anc).pack(fill='both', expand=True)
+
+        tk.Frame(self.right_frame, bg=BORDER, height=1).pack(fill='x', side='top')
+
+        # Scrollable data area
+        scroll_outer = tk.Frame(self.right_frame, bg=PANEL_BG)
+        scroll_outer.pack(fill='both', expand=True, side='top')
 
         self._list_canvas = tk.Canvas(
-            list_outer, bg=TOOLBAR_BG, width=244, highlightthickness=0)
-        sb = tk.Scrollbar(list_outer, orient='vertical',
+            scroll_outer, bg=PANEL_BG, highlightthickness=0)
+        sb = tk.Scrollbar(scroll_outer, orient='vertical',
                           command=self._list_canvas.yview)
         sb.pack(side='right', fill='y')
         self._list_canvas.pack(side='left', fill='both', expand=True)
         self._list_canvas.configure(yscrollcommand=sb.set)
 
-        self._list_inner = tk.Frame(self._list_canvas, bg=TOOLBAR_BG)
+        self._list_inner = tk.Frame(self._list_canvas, bg=PANEL_BG)
         self._list_win = self._list_canvas.create_window(
             (0, 0), window=self._list_inner, anchor='nw')
         self._list_inner.bind('<Configure>', self._on_list_configure)
 
+        self._panel_show_empty()
+
     def _on_list_configure(self, event):
-        self._list_canvas.configure(
-            scrollregion=self._list_canvas.bbox('all'))
+        self._list_canvas.configure(scrollregion=self._list_canvas.bbox('all'))
         self._list_canvas.itemconfig(
             self._list_win, width=self._list_canvas.winfo_width())
 
-    def _show_data_panel(self, cell_list):
+    def _panel_show_empty(self):
         for w in self._list_inner.winfo_children():
             w.destroy()
+        self._panel_title.config(text='细胞数据')
+        tk.Label(self._list_inner, text='等待识别...',
+                 bg=PANEL_BG, fg=TEXT_DIM, font=MONO_FONT,
+                 pady=24).pack()
 
+    def _panel_populate(self, cell_list):
+        for w in self._list_inner.winfo_children():
+            w.destroy()
         self._panel_title.config(text=f'细胞数据  {len(cell_list)} 个')
 
         for i, cell in enumerate(cell_list, start=1):
             cx, cy = cell["pos"]
             bv     = int(cell["brightness"])
+            diam   = f'{cell["er"] * 2:.1f}'
             color  = ACCENT_GREEN if i <= 3 else TEXT_SEC
+            bg_row = '#0A0420' if i % 2 == 0 else PANEL_BG
 
-            row = tk.Frame(self._list_inner, bg=TOOLBAR_BG, pady=3, padx=10)
-            row.pack(fill='x')
-            tk.Label(row, text=f'#{i}', bg=TOOLBAR_BG, fg=color,
-                     font=MONO_FONT, width=3, anchor='w').pack(side='left')
-            tk.Label(row, text=f'({cx}, {cy})', bg=TOOLBAR_BG, fg=TEXT_SEC,
-                     font=MONO_FONT).pack(side='left', padx=(4, 0))
-            tk.Label(row, text=str(bv), bg=TOOLBAR_BG, fg=color,
-                     font=MONO_FONT, anchor='e').pack(side='right')
+            vals   = [f'#{i}', str(cx), str(cy), diam, str(bv)]
+            colors = [color] * 5
+            _col_row(self._list_inner, vals, colors, bg_row)
 
             if i < len(cell_list):
                 tk.Frame(self._list_inner, bg='#1A0A30', height=1).pack(fill='x')
-
-        row_h   = 26
-        list_h  = min(len(cell_list) * row_h, 400)
-        self._list_canvas.config(height=list_h)
-        self._data_panel.place(relx=1.0, y=16, anchor='ne', x=-16)
-        self._data_panel.lift()
-
-    def _hide_data_panel(self):
-        self._data_panel.place_forget()
 
     # ── Save ──────────────────────────────────────────────────────────────────
     def save_results(self):
@@ -871,26 +873,23 @@ class CellAppCP3:
         save_dir = os.path.join(prog_dir, '细胞数据', stem)
         os.makedirs(save_dir, exist_ok=True)
 
-        # result image
         cv2.imencode('.png', self.result_img)[1].tofile(
             os.path.join(save_dir, f"{stem}_result.png"))
 
-        # top3.txt
-        with open(os.path.join(save_dir, f"{stem}_top3.txt"),
+        with open(os.path.join(save_dir, f"{stem}_top3.csv"),
                   'w', encoding='utf-8') as f:
-            f.write("排名, 坐标x, 坐标y, 亮度值\n")
+            f.write("排名,坐标X,坐标Y,亮度值\n")
             for i, cell in enumerate(self.cell_list[:3], start=1):
                 cx, cy = cell["pos"]
-                f.write(f"{i}, {cx}, {cy}, {int(cell['brightness'])}\n")
+                f.write(f"{i},{cx},{cy},{int(cell['brightness'])}\n")
 
-        # data.txt — all valid cells sorted by brightness
-        with open(os.path.join(save_dir, f"{stem}_data.txt"),
+        with open(os.path.join(save_dir, f"{stem}_data.csv"),
                   'w', encoding='utf-8') as f:
-            f.write("编号, 直径(px), 坐标x, 坐标y\n")
+            f.write("编号,直径(px),坐标X,坐标Y,亮度值\n")
             for i, cell in enumerate(self.cell_list, start=1):
                 cx, cy = cell["pos"]
                 diameter = round(cell["er"] * 2, 1)
-                f.write(f"{i}, {diameter}, {cx}, {cy}\n")
+                f.write(f"{i},{diameter},{cx},{cy},{int(cell['brightness'])}\n")
 
         self._set_status(f'已保存到 细胞数据/{stem}/', ACCENT_GREEN, ACCENT_GREEN)
 
@@ -900,7 +899,7 @@ class CellAppCP3:
         self.canvas.delete('cell_image')
         img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         h, w = img.shape[:2]
-        cw = self.canvas.winfo_width()  or 1100
+        cw = self.canvas.winfo_width()  or 820
         ch = self.canvas.winfo_height() or 714
         ratio = min(cw / w, ch / h)
         nw, nh = int(w * ratio), int(h * ratio)
