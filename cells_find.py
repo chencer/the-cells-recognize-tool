@@ -595,20 +595,98 @@ class CellAppCP3:
             corrected_diam = max(20.0, min(diam * scale, 500.0))
             print(f"校正后直径: {corrected_diam:.1f}px  (短边={short_side}px, scale={scale:.2f})")
 
-            # Pass 2: segmentation with corrected diameter
+            # Pass 2: segmentation (tiling for large images)
             self.root.after(0, self._set_spinner_text,
                             '正在分割识别...',
                             f'diameter={corrected_diam:.1f}px')
 
-            masks = self.model.eval(
-                self.raw_image,
+            H, W = self.raw_image.shape[:2]
+            short_side = min(H, W)
+            tile_size = max(1024, short_side)
+            overlap = int(tile_size * 0.15)
+
+            eval_kw = dict(
                 diameter=corrected_diam,
                 channels=[0, 0],
                 flow_threshold=0.95,
                 cellprob_threshold=1.0,
                 min_size=int(corrected_diam ** 2 * 0.2),
                 resample=True,
-            )[0]
+            )
+
+            need_tile = (W > tile_size * 2.5) or (H > tile_size * 2.5)
+
+            if not need_tile:
+                masks = self.model.eval(self.raw_image, **eval_kw)[0]
+            else:
+                def _tile_starts(length, t_size, ovlp):
+                    starts = []
+                    s = 0
+                    while s < length:
+                        starts.append(s)
+                        if s + t_size >= length:
+                            break
+                        s += t_size - ovlp
+                    return starts
+
+                x_starts = _tile_starts(W, tile_size, overlap)
+                y_starts = _tile_starts(H, tile_size, overlap)
+                total_tiles = len(y_starts) * len(x_starts)
+
+                masks = np.zeros((H, W), dtype=np.int32)
+                next_id = 1
+
+                for yi, y0 in enumerate(y_starts):
+                    for xi, x0 in enumerate(x_starts):
+                        y1 = min(y0 + tile_size, H)
+                        x1 = min(x0 + tile_size, W)
+                        tile = self.raw_image[y0:y1, x0:x1]
+                        tile_num = yi * len(x_starts) + xi + 1
+
+                        self.root.after(0, self._set_spinner_text,
+                                        f'分块识别 ({tile_num}/{total_tiles})...',
+                                        f'{x0}-{x1} x {y0}-{y1}')
+
+                        tile_masks = self.model.eval(tile, **eval_kw)[0]
+                        tile_ids = np.unique(tile_masks)
+                        tile_ids = tile_ids[tile_ids > 0]
+
+                        for tid in tile_ids:
+                            t_mask = (tile_masks == tid).astype(np.uint8)
+                            t_area = int(np.sum(t_mask))
+
+                            existing = masks[y0:y1, x0:x1]
+                            overlap_region = existing[t_mask > 0]
+                            overlap_ids = np.unique(overlap_region)
+                            overlap_ids = overlap_ids[overlap_ids > 0]
+
+                            merged = False
+                            for oid in overlap_ids:
+                                o_mask_full = (masks == oid).astype(np.uint8)
+                                o_mask_tile = o_mask_full[y0:y1, x0:x1]
+                                intersection = int(np.sum((t_mask > 0) & (o_mask_tile > 0)))
+                                union = int(np.sum((t_mask > 0) | (o_mask_tile > 0)))
+                                iou = intersection / union if union > 0 else 0
+                                if iou > 0.3:
+                                    o_area = int(np.sum(o_mask_full))
+                                    if t_area > o_area:
+                                        masks[masks == oid] = 0
+                                        full_mask = np.zeros((H, W), dtype=np.uint8)
+                                        full_mask[y0:y1, x0:x1] = t_mask
+                                        masks[full_mask > 0] = oid
+                                    merged = True
+                                    break
+
+                            if not merged:
+                                full_mask = np.zeros((H, W), dtype=np.uint8)
+                                full_mask[y0:y1, x0:x1] = t_mask
+                                masks[full_mask > 0] = next_id
+                                next_id += 1
+
+                print(f'[Tiling] {len(x_starts)}x{len(y_starts)} tiles, '
+                      f'tile_size={tile_size}, overlap={overlap}, '
+                      f'final cells={next_id - 1}')
+
             self._result_queue.put(('ok', masks))
         except Exception as e:
             self._result_queue.put(('err', e))
