@@ -1,27 +1,70 @@
 # The Cells Recognize Tool
 
-基于 **Cellpose v3.0** 的荧光细胞图像分割与亮度排名桌面工具。
+基于 **Cellpose cyto3** 模型的荧光细胞图像分割与亮度排名桌面工具。当前版本：**v2.1.0**
 
 ---
 
 ## 功能概览
 
-- 导入荧光显微镜图片，一键完成细胞分割
-- 自动过滤边缘截断的不完整细胞
-- 按**核心亮度**（前 10% 高亮像素均值）对所有细胞排名
-- 在图像上高亮标注最亮细胞，并输出其**坐标与亮度值**
-- 状态栏实时显示：`最亮细胞: 坐标(x, y)  亮度=xxx`
+| 功能 | 说明 |
+|------|------|
+| 细胞分割 | Cellpose cyto3 模型，一键完成荧光图像分割 |
+| 边缘完整度过滤 | 剔除与图像边界接触的截断细胞（完整度 ≥ 90%） |
+| 面积 + 圆形度过滤 | 去除噪声点和异形非细胞物体 |
+| 亮度排名 | 80% 内圈前 10% 最亮像素均值，避免大细胞虚排 |
+| Top 3 标注 | 最亮三个细胞分级高亮，环形采样区域可视化 |
+| 原图 / 结果图切换 | 一键对比原始图像与分析结果 |
+| 异步加载 | 启动时后台加载模型，进度动画实时反馈 |
+| UI 风格 | OLED dark cinema + glassmorphism，Windows 原生标题栏 |
+
+---
+
+## 使用方法
+
+**Windows 用户**（推荐）：
+
+1. 从 [Releases](https://github.com/chencer/the-cells-recognize-tool/releases) 下载最新 `.exe`
+2. 双击运行，等待模型加载完成（首次约 10–30 秒）
+3. 点击 **导入图片** 选择荧光图像（.tif / .png / .jpg）
+4. 点击 **细胞识别** 开始分割
+5. 查看结果：Top 3 细胞高亮标注，右侧显示亮度排名
+
+**开发运行**：
+
+```bash
+pip install -r requirements.txt
+python cells_find.py
+```
+
+---
+
+## 过滤算法说明
+
+### 边缘完整度过滤
+
+检测细胞 mask 的任意像素是否触碰图像四条边（第 0 行/列、最后行/列）。接触则判定为边缘截断细胞并剔除。
+
+> 注：原凸包比方法（mask 面积 / 凸包面积）无法识别圆弧截断，因为弧形 cap 本身即为凸形，比值恒 ≈ 1.0。
+
+### 面积 + 圆形度过滤
+
+- **面积过滤**：去除面积极小的噪声点
+- **圆形度** = 4π × 面积 / 周长²，圆形度过低的异形物体不参与排名
+
+### 亮度得分
+
+取细胞区域内 **前 10% 最亮像素的均值**作为亮度得分。相比全区域平均，此方法能准确识别小而亮的目标，避免大而暗的细胞因面积优势虚排前列。
 
 ---
 
 ## 文件结构
 
 ```
-cells_find.py       # 主程序（打包版，内置本地模型加载）
-cells_recognize.py  # 开发版（直接调用系统 cellpose）
-cyto3               # 本地 Cellpose cyto3 模型权重
-requirements.txt    # 依赖列表
-.github/workflows/  # GitHub Actions 自动打包为 .exe
+cells_find.py         # 主程序（UI + 分析逻辑）
+cells_recognize.py    # 开发版（无 UI，直接调用 cellpose）
+cyto3                 # 本地 Cellpose cyto3 模型权重（CP3 格式）
+requirements.txt      # 依赖列表
+.github/workflows/    # GitHub Actions 自动打包 .exe
 ```
 
 ---
@@ -32,49 +75,23 @@ requirements.txt    # 依赖列表
 pip install -r requirements.txt
 ```
 
-核心依赖：
-
 | 包 | 版本 |
-|---|---|
-| cellpose | 3.0.11 |
+|----|------|
+| cellpose | ≥ 3.0 |
 | opencv-python | ≥ 4.8 |
 | torch | ≥ 2.0 |
+| ttkbootstrap | ≥ 1.10 |
 | Pillow | ≥ 10.0 |
 
 ---
 
-## 使用方法
+## Releases
 
-```bash
-python cells_find.py
-```
-
-1. 点击 **1. 导入图片** 选择荧光图像
-2. 点击 **2. 细胞识别** 开始分割
-3. 结果图像中：
-   - **红色轮廓 + 标签**：最亮的 2 个细胞
-   - **黄色轮廓**：其余识别细胞
-   - 状态栏显示 Top 1 细胞坐标与亮度值
-
----
-
-## 排名算法
-
-每个细胞的亮度得分 = 该细胞区域内**前 10% 最亮像素的均值**。
-
-相比全区域平均值，此方法能准确识别小而亮的细胞，避免大而暗的细胞因面积优势虚排前列。
-
----
-
-## 边缘过滤
-
-识别完成后自动剔除与图像任意边界相交的细胞——这类细胞因拍摄视野截断而形态不完整，不参与排名。
-
----
-
-## 打包为 .exe
-
-推送到 `main` 分支后，GitHub Actions 自动触发打包流程，产物见 Releases。
+- [v2.1.0](https://github.com/chencer/the-cells-recognize-tool/releases/tag/v2.1.0)
+- [v1.4.0](https://github.com/chencer/the-cells-recognize-tool/releases/tag/v1.4.0)
+- [v1.3.0](https://github.com/chencer/the-cells-recognize-tool/releases/tag/v1.3.0)
+- [v1.2.0](https://github.com/chencer/the-cells-recognize-tool/releases/tag/v1.2.0)
+- [v1.1.0](https://github.com/chencer/the-cells-recognize-tool/releases/tag/v1.1.0)
 
 ---
 
