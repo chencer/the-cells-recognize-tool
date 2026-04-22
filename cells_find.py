@@ -669,7 +669,7 @@ class CellAppCP3:
         # ── Step 2: area ──────────────────────────────────────────────────────
         if candidates:
             median_area = float(np.median([c["mask_area"] for c in candidates]))
-            area_thresh = median_area * 0.1
+            area_thresh = median_area * 0.15
             before2     = len(candidates)
             filtered    = []
             for c in candidates:
@@ -688,7 +688,7 @@ class CellAppCP3:
         for c in candidates:
             circ = (4 * math.pi * c["mask_area"] / (c["perimeter"] ** 2)
                     if c["perimeter"] > 0 else 0.0)
-            if circ < 0.4:
+            if circ < 0.5:
                 print(f"  [skip-circ] cell {c['cid']}: circularity={circ:.3f} < 0.40")
                 continue
             filtered.append(c)
@@ -764,7 +764,7 @@ class CellAppCP3:
                 cx, cy = cell["pos"]
                 cv2.drawContours(res_img, cell["contours"], -1, (0, 255, 0), 2)
                 cv2.circle(res_img, (cx, cy), 5, (0, 255, 0), -1)
-                label = f"{rank} · {int(cell['brightness'])}"
+                label = f"{rank} | {int(cell['brightness'])}"
                 cv2.putText(res_img, label, (cx + 8, cy - 8),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
                 print(f"  #{rank}  坐标=({cx}, {cy})  亮度={int(cell['brightness'])}")
