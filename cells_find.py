@@ -87,6 +87,8 @@ class CellAppCP3:
 
         self.result_img       = None   # annotated result image
         self._showing_result  = True   # toggle state
+        self.image_path       = None   # path of last loaded image
+        self.cell_list        = None   # sorted cell list from last analysis
 
         self._setup_window()
         self.setup_ui()
@@ -346,6 +348,13 @@ class CellAppCP3:
             command=self._toggle_view)
         # not packed yet
 
+        # Save button — hidden until first analysis completes
+        self.save_btn = self._make_btn(
+            self._tb_frame, '  保存  ',
+            '#0A1A0A', '#1A3020', '#00E676',
+            command=self.save_results)
+        # not packed yet
+
     def _update_toolbar_pill(self):
         self._tb_frame.update_idletasks()
         fw = self._tb_frame.winfo_reqwidth()
@@ -444,10 +453,16 @@ class CellAppCP3:
         self._showing_result = True
         self.toggle_btn.config(text='  原图  ')
         self.toggle_btn.pack(side='left', padx=(4, 0))
+        self.save_btn.pack(side='left', padx=(4, 0))
         self.root.after(10, self._update_toolbar_pill)
 
     def _hide_toggle_btn(self):
         self.toggle_btn.pack_forget()
+        self.save_btn.pack_forget()
+        self.root.after(10, self._update_toolbar_pill)
+
+    def _hide_save_btn(self):
+        self.save_btn.pack_forget()
         self.root.after(10, self._update_toolbar_pill)
 
     def _toggle_view(self):
@@ -543,10 +558,12 @@ class CellAppCP3:
     def load_image(self):
         path = filedialog.askopenfilename()
         if path:
+            self.image_path = path
             self.raw_image = cv2.imdecode(
                 np.fromfile(path, dtype=np.uint8), cv2.IMREAD_COLOR)
             self.display_image(self.raw_image)
             self._enable_run_btn()
+            self._hide_save_btn()
             self._set_status('图片载入成功', TEXT_PRI, ACCENT_PUR)
 
     def run_analysis(self):
@@ -717,14 +734,18 @@ class CellAppCP3:
 
         print(f"过滤前细胞数: {total_detected}  最终有效细胞: {len(cell_list)}")
         cell_list.sort(key=lambda x: x["brightness"], reverse=True)
+        self.cell_list = cell_list
 
         if cell_list:
             top3   = cell_list[:3]
             others = cell_list[3:]
 
-            # Yellow contours for non-top-3
-            for cell in others:
+            # Yellow contours + rank number (4, 5, …) for non-top-3
+            for idx, cell in enumerate(others, start=4):
+                cx, cy = cell["pos"]
                 cv2.drawContours(res_img, cell["contours"], -1, (0, 255, 255), 2)
+                cv2.putText(res_img, str(idx), (cx + 6, cy - 6),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (220, 220, 220), 1)
 
             # Ring overlay for top-3: darken outer 20% annulus (alpha=0.4 darkening)
             for cell in top3:
@@ -738,26 +759,67 @@ class CellAppCP3:
                 ring = (outer_m > 0) & (inner_m == 0) & (cell["mask"] > 0)
                 res_img[ring] = (res_img[ring] * 0.6).astype(np.uint8)
 
-            # Green contour + center dot + rank number for top 3
+            # Green contour + center dot + "rank · brightness" label for top 3
             for rank, cell in enumerate(top3, start=1):
                 cx, cy = cell["pos"]
                 cv2.drawContours(res_img, cell["contours"], -1, (0, 255, 0), 2)
                 cv2.circle(res_img, (cx, cy), 5, (0, 255, 0), -1)
-                cv2.putText(res_img, str(rank), (cx + 8, cy - 8),
-                            cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
+                label = f"{rank} · {int(cell['brightness'])}"
+                cv2.putText(res_img, label, (cx + 8, cy - 8),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
                 print(f"  #{rank}  坐标=({cx}, {cy})  亮度={int(cell['brightness'])}")
 
             top1 = top3[0]
             cx1, cy1 = top1["pos"]
             self._set_status(
-                f'完成 · #1 ({cx1}, {cy1})  亮度={int(top1["brightness"])}',
+                f'完成 · 检测: {total_detected} / 有效: {len(cell_list)}'
+                f' · #1 ({cx1}, {cy1}) 亮度={int(top1["brightness"])}',
                 ACCENT_GREEN, ACCENT_GREEN)
         else:
-            self._set_status('完成（无有效细胞）', TEXT_SEC, TEXT_DIM)
+            self._set_status(
+                f'完成 · 检测: {total_detected} / 有效: 0',
+                TEXT_SEC, TEXT_DIM)
 
         self.result_img = res_img
         self.display_image(res_img)
         self._show_toggle_btn()
+
+    # ── Save ──────────────────────────────────────────────────────────────────
+    def save_results(self):
+        if not self.cell_list or self.image_path is None or self.result_img is None:
+            return
+
+        if hasattr(sys, '_MEIPASS'):
+            prog_dir = os.path.dirname(sys.executable)
+        else:
+            prog_dir = os.path.dirname(os.path.abspath(__file__))
+
+        stem = os.path.splitext(os.path.basename(self.image_path))[0]
+        save_dir = os.path.join(prog_dir, '细胞数据', stem)
+        os.makedirs(save_dir, exist_ok=True)
+
+        # result image
+        cv2.imencode('.png', self.result_img)[1].tofile(
+            os.path.join(save_dir, f"{stem}_result.png"))
+
+        # top3.txt
+        with open(os.path.join(save_dir, f"{stem}_top3.txt"),
+                  'w', encoding='utf-8') as f:
+            f.write("排名, 坐标x, 坐标y, 亮度值\n")
+            for i, cell in enumerate(self.cell_list[:3], start=1):
+                cx, cy = cell["pos"]
+                f.write(f"{i}, {cx}, {cy}, {int(cell['brightness'])}\n")
+
+        # data.txt — all valid cells sorted by brightness
+        with open(os.path.join(save_dir, f"{stem}_data.txt"),
+                  'w', encoding='utf-8') as f:
+            f.write("编号, 直径(px), 坐标x, 坐标y\n")
+            for i, cell in enumerate(self.cell_list, start=1):
+                cx, cy = cell["pos"]
+                diameter = round(cell["er"] * 2, 1)
+                f.write(f"{i}, {diameter}, {cx}, {cy}\n")
+
+        self._set_status(f'已保存到 细胞数据/{stem}/', ACCENT_GREEN, ACCENT_GREEN)
 
     # ── Display ───────────────────────────────────────────────────────────────
     def display_image(self, img):
