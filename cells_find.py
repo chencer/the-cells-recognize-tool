@@ -582,9 +582,15 @@ class CellAppCP3:
     def _analysis_worker(self):
         try:
             # Pass 1: estimate diameter
-            masks_est, _, _ = self.model.eval(self.raw_image, diameter=0, channels=[0, 0])
+            H, W = self.raw_image.shape[:2]
+            cx, cy = W // 2, H // 2
+            crop_size = min(H, W, 1024)
+            x0 = max(0, cx - crop_size // 2)
+            y0 = max(0, cy - crop_size // 2)
+            crop = self.raw_image[y0:y0+crop_size, x0:x0+crop_size]
+            masks_est, _, _ = self.model.eval(crop, diameter=0, channels=[0, 0])
             from cellpose.utils import diameters
-            diam = float(diameters(masks_est)[0])  # returns (median, per_cell_array)
+            diam = float(diameters(masks_est)[0])
             if diam == 0 or np.isnan(diam):
                 diam = 30.0
             print(f"Cellpose 估算直径: {diam:.1f}px")
