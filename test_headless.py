@@ -13,7 +13,7 @@ print(f"OpenCV: {cv2.__version__}")
 print(f"Torch:  {torch.__version__}")
 
 # --- Load image ---
-img = cv2.imread("test_cell.tif", cv2.IMREAD_COLOR)
+img = cv2.imread("test_cell.jpg", cv2.IMREAD_COLOR)
 assert img is not None, "Image load failed"
 print(f"Image: {img.shape[1]}x{img.shape[0]}, dtype={img.dtype}")
 

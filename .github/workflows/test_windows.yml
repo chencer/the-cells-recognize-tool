@@ -24,10 +24,11 @@ jobs:
         pip install torch torchvision --extra-index-url https://download.pytorch.org/whl/cpu
         pip install opencv-python Pillow numpy cellpose==3.0.11
 
-    - name: Download test image
+    - name: Use test image from repo
       run: |
-        curl -L -o test_cell.tif "https://cdn.discordapp.com/attachments/1151215465557921952/1495809183675846696/0058.tif?ex=69e7985c&is=69e646dc&hm=2db86a4321705a1c1a9a953b997a96c715cc0076df2fbfab3b80e2e14dcd4613&"
-        python -c "import os; print('Image size:', os.path.getsize('test_cell.tif'), 'bytes')"
+        copy test_images\wide_test.jpg test_cell.jpg
+        python -c "import os; print('Image size:', os.path.getsize('test_cell.jpg'), 'bytes')"
+      shell: cmd
 
     - name: Run headless cell detection test
       run: python test_headless.py
