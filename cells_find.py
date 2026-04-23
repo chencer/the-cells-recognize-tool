@@ -789,7 +789,7 @@ class CellAppCP3:
         for c in candidates:
             circ = (4 * math.pi * c["mask_area"] / (c["perimeter"] ** 2)
                     if c["perimeter"] > 0 else 0.0)
-            if circ < 0.5:
+            if circ < 0.3:
                 print(f"  [skip-circ] cell {c['cid']}: circularity={circ:.3f} < 0.50")
                 continue
             filtered.append(c)
