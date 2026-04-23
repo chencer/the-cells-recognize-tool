@@ -32,6 +32,8 @@ jobs:
 
     - name: Run headless cell detection test
       run: python test_headless.py
+      env:
+        PYTHONUTF8: "1"
 
     - name: Upload result image
       uses: actions/upload-artifact@v4
