@@ -152,28 +152,8 @@ class CellAppCP3:
 
             model_path = get_resource_path("cyto3")
             if os.path.exists(model_path):
-                cache_path = model_path + '.pkl'
-                if (os.path.exists(cache_path) and
-                        os.path.getmtime(cache_path) > os.path.getmtime(model_path)):
-                    try:
-                        m = torch.serialization.load(
-                            cache_path, map_location='cpu', weights_only=False)
-                        if use_gpu and (torch.cuda.is_available() or
-                                        torch.backends.mps.is_available()):
-                            m.net = m.net.cuda() if torch.cuda.is_available() else m.net.to('mps')
-                        print(f"✅ 从缓存加载模型 (cyto3.pkl)")
-                    except Exception as e:
-                        print(f"⚠️ 缓存读取失败，重新加载: {e}")
-                        m = None
-                else:
-                    m = None
-                if m is None:
-                    m = cp_models.CellposeModel(gpu=use_gpu, pretrained_model=model_path)
-                    try:
-                        torch.serialization.save(m, cache_path)
-                        print(f"✅ 模型缓存已保存: cyto3.pkl")
-                    except Exception as e:
-                        print(f"⚠️ 缓存保存失败: {e}")
+                m = cp_models.CellposeModel(gpu=use_gpu, pretrained_model=model_path)
+                print(f"✅ 成功加载本地模型: {model_path}")
             else:
                 m = cp_models.Cellpose(gpu=use_gpu, model_type="cyto3")
                 print("✅ 使用系统默认路径加载 cyto3")
@@ -650,11 +630,15 @@ class CellAppCP3:
             circle_area = math.pi * er * er
             circle_comp = mask_area / circle_area if circle_area > 0 else 0.0
 
-            print(f"  cell {cid}: mask={mask_area:.0f}px  hull={hull_comp:.3f}"
-                  f"  circle={circle_comp:.3f}  touches={'Y' if touches else 'N'}")
+            completeness = circle_comp if touches else hull_comp
+            method       = "circle"    if touches else "hull"
 
-            if hull_comp < 0.85 or circle_comp < 0.65:
-                print(f"  [skip] cell {cid}: hull={hull_comp:.3f}  circle={circle_comp:.3f}")
+            print(f"  cell {cid}: mask={mask_area:.0f}px  hull={hull_comp:.3f}"
+                  f"  circle={circle_comp:.3f}  touches={'Y' if touches else 'N'}"
+                  f"  -> {method}={completeness:.3f}")
+
+            if completeness < 0.85:
+                print(f"  [skip] cell {cid}: {method}={completeness:.3f} < 0.85")
                 continue
 
             perimeter = cv2.arcLength(contours[0], True)
