@@ -630,15 +630,11 @@ class CellAppCP3:
             circle_area = math.pi * er * er
             circle_comp = mask_area / circle_area if circle_area > 0 else 0.0
 
-            completeness = circle_comp if touches else hull_comp
-            method       = "circle"    if touches else "hull"
-
             print(f"  cell {cid}: mask={mask_area:.0f}px  hull={hull_comp:.3f}"
-                  f"  circle={circle_comp:.3f}  touches={'Y' if touches else 'N'}"
-                  f"  -> {method}={completeness:.3f}")
+                  f"  circle={circle_comp:.3f}  touches={'Y' if touches else 'N'}")
 
-            if completeness < 0.85:
-                print(f"  [skip] cell {cid}: {method}={completeness:.3f} < 0.85")
+            if hull_comp < 0.85 or circle_comp < 0.65:
+                print(f"  [skip] cell {cid}: hull={hull_comp:.3f}  circle={circle_comp:.3f}")
                 continue
 
             perimeter = cv2.arcLength(contours[0], True)
