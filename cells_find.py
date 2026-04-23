@@ -140,6 +140,7 @@ class CellAppCP3:
             import torch
             from cellpose import models as cp_models
             import ssl as _ssl
+            from model_cache import load_model_cached
 
             torch.serialization.add_safe_globals([cp_models.CellposeModel])
             import torch.serialization
@@ -152,8 +153,7 @@ class CellAppCP3:
 
             model_path = get_resource_path("cyto3")
             if os.path.exists(model_path):
-                m = cp_models.CellposeModel(gpu=use_gpu, pretrained_model=model_path)
-                print(f"✅ 成功加载本地模型: {model_path}")
+                m = load_model_cached(model_path, use_gpu=use_gpu)
             else:
                 m = cp_models.Cellpose(gpu=use_gpu, model_type="cyto3")
                 print("✅ 使用系统默认路径加载 cyto3")
@@ -509,23 +509,16 @@ class CellAppCP3:
             start=0, extent=70, outline=ACCENT_PUR,
             width=4, style='arc', tags='sp_arc')
 
-        self._spin_text1 = self._spin_cv.create_text(
+        self._spin_cv.create_text(
             56, 26, anchor='w', text=text,
             fill=TEXT_PRI, font=('Arial', 10, 'bold'))
-        self._spin_text2 = self._spin_cv.create_text(
+        self._spin_cv.create_text(
             57, 44, anchor='w', text=subtext,
             fill=TEXT_DIM, font=MONO_FONT)
 
         self._spin_running = True
         self._spin_angle   = 0
         self._tick_spinner()
-
-    def _set_spinner_text(self, text, subtext=''):
-        if hasattr(self, '_spin_cv') and self._spin_cv.winfo_exists():
-            if hasattr(self, '_spin_text1'):
-                self._spin_cv.itemconfig(self._spin_text1, text=text)
-            if hasattr(self, '_spin_text2'):
-                self._spin_cv.itemconfig(self._spin_text2, text=subtext)
 
     def _tick_spinner(self):
         if not self._spin_running:
@@ -567,9 +560,7 @@ class CellAppCP3:
         self._set_status('正在分析中...', ACCENT_YELLOW, ACCENT_YELLOW)
         self._start_scan()
         self._start_pulse()
-        self._build_spinner_card(
-            text='正在估算细胞直径...',
-            subtext='diameter=0 自动估算')
+        self._build_spinner_card()
         while not self._result_queue.empty():
             try:
                 self._result_queue.get_nowait()
@@ -581,118 +572,15 @@ class CellAppCP3:
 
     def _analysis_worker(self):
         try:
-            # Pass 1: estimate diameter
-            H, W = self.raw_image.shape[:2]
-            cx, cy = W // 2, H // 2
-            crop_size = min(H, W, 1024)
-            x0 = max(0, cx - crop_size // 2)
-            y0 = max(0, cy - crop_size // 2)
-            crop = self.raw_image[y0:y0+crop_size, x0:x0+crop_size]
-            masks_est, _, _ = self.model.eval(crop, diameter=0, channels=[0, 0])
-            from cellpose.utils import diameters
-            diam = float(diameters(masks_est)[0])
-            if diam == 0 or np.isnan(diam):
-                diam = 30.0
-            print(f"Cellpose 估算直径: {diam:.1f}px")
-
-            H, W = self.raw_image.shape[:2]
-            short_side = min(H, W)
-            scale = short_side / 1080.0
-            corrected_diam = max(20.0, min(diam * scale, 500.0))
-            print(f"校正后直径: {corrected_diam:.1f}px  (短边={short_side}px, scale={scale:.2f})")
-
-            # Pass 2: segmentation (tiling for large images)
-            self.root.after(0, self._set_spinner_text,
-                            '正在分割识别...',
-                            f'diameter={corrected_diam:.1f}px')
-
-            H, W = self.raw_image.shape[:2]
-            short_side = min(H, W)
-            tile_size = max(1024, short_side)
-            overlap = int(tile_size * 0.15)
-
-            eval_kw = dict(
-                diameter=corrected_diam,
+            masks = self.model.eval(
+                self.raw_image,
+                diameter=120,
                 channels=[0, 0],
                 flow_threshold=0.95,
                 cellprob_threshold=1.0,
-                min_size=int(corrected_diam ** 2 * 0.2),
+                min_size=200,
                 resample=True,
-            )
-
-            need_tile = (W > tile_size * 2.5) or (H > tile_size * 2.5)
-
-            if not need_tile:
-                masks = self.model.eval(self.raw_image, **eval_kw)[0]
-            else:
-                def _tile_starts(length, t_size, ovlp):
-                    starts = []
-                    s = 0
-                    while s < length:
-                        starts.append(s)
-                        if s + t_size >= length:
-                            break
-                        s += t_size - ovlp
-                    return starts
-
-                x_starts = _tile_starts(W, tile_size, overlap)
-                y_starts = _tile_starts(H, tile_size, overlap)
-                total_tiles = len(y_starts) * len(x_starts)
-
-                masks = np.zeros((H, W), dtype=np.int32)
-                next_id = 1
-
-                for yi, y0 in enumerate(y_starts):
-                    for xi, x0 in enumerate(x_starts):
-                        y1 = min(y0 + tile_size, H)
-                        x1 = min(x0 + tile_size, W)
-                        tile = self.raw_image[y0:y1, x0:x1]
-                        tile_num = yi * len(x_starts) + xi + 1
-
-                        self.root.after(0, self._set_spinner_text,
-                                        f'分块识别 ({tile_num}/{total_tiles})...',
-                                        f'{x0}-{x1} x {y0}-{y1}')
-
-                        tile_masks = self.model.eval(tile, **eval_kw)[0]
-                        tile_ids = np.unique(tile_masks)
-                        tile_ids = tile_ids[tile_ids > 0]
-
-                        for tid in tile_ids:
-                            t_mask = (tile_masks == tid).astype(np.uint8)
-                            t_area = int(np.sum(t_mask))
-
-                            existing = masks[y0:y1, x0:x1]
-                            overlap_region = existing[t_mask > 0]
-                            overlap_ids = np.unique(overlap_region)
-                            overlap_ids = overlap_ids[overlap_ids > 0]
-
-                            merged = False
-                            for oid in overlap_ids:
-                                o_mask_full = (masks == oid).astype(np.uint8)
-                                o_mask_tile = o_mask_full[y0:y1, x0:x1]
-                                intersection = int(np.sum((t_mask > 0) & (o_mask_tile > 0)))
-                                union = int(np.sum((t_mask > 0) | (o_mask_tile > 0)))
-                                iou = intersection / union if union > 0 else 0
-                                if iou > 0.3:
-                                    o_area = int(np.sum(o_mask_full))
-                                    if t_area > o_area:
-                                        masks[masks == oid] = 0
-                                        full_mask = np.zeros((H, W), dtype=np.uint8)
-                                        full_mask[y0:y1, x0:x1] = t_mask
-                                        masks[full_mask > 0] = oid
-                                    merged = True
-                                    break
-
-                            if not merged:
-                                full_mask = np.zeros((H, W), dtype=np.uint8)
-                                full_mask[y0:y1, x0:x1] = t_mask
-                                masks[full_mask > 0] = next_id
-                                next_id += 1
-
-                print(f'[Tiling] {len(x_starts)}x{len(y_starts)} tiles, '
-                      f'tile_size={tile_size}, overlap={overlap}, '
-                      f'final cells={next_id - 1}')
-
+            )[0]
             self._result_queue.put(('ok', masks))
         except Exception as e:
             self._result_queue.put(('err', e))
@@ -761,18 +649,6 @@ class CellAppCP3:
             })
         print(f"[Step1] 完整度过滤后: {len(candidates)} / {total_detected}")
 
-        # ── Step 1b: dark region filter ───────────────────────────────────────
-        filtered_dark = []
-        for c in candidates:
-            pixels = gray[c["mask"] > 0]
-            mean_brightness = float(pixels.mean()) if len(pixels) > 0 else 0.0
-            if mean_brightness < 15:
-                print(f"  [skip-dark] cell {c['cid']}: mean_brightness={mean_brightness:.1f} < 15")
-                continue
-            filtered_dark.append(c)
-        candidates = filtered_dark
-        print(f"[Step1b] 暗区过滤后: {len(candidates)}")
-
         # ── Step 2: area ──────────────────────────────────────────────────────
         if candidates:
             median_area = float(np.median([c["mask_area"] for c in candidates]))
@@ -795,7 +671,7 @@ class CellAppCP3:
         for c in candidates:
             circ = (4 * math.pi * c["mask_area"] / (c["perimeter"] ** 2)
                     if c["perimeter"] > 0 else 0.0)
-            if circ < 0.3:
+            if circ < 0.5:
                 print(f"  [skip-circ] cell {c['cid']}: circularity={circ:.3f} < 0.50")
                 continue
             filtered.append(c)
