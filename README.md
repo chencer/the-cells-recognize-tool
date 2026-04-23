@@ -1,6 +1,6 @@
 # The Cells Recognize Tool
 
-基于 **Cellpose cyto3** 模型的荧光细胞图像分割与亮度排名桌面工具。当前版本：**v2.1.0**
+基于 **Cellpose cyto3** 模型的荧光细胞图像分割与亮度排名桌面工具。当前版本：**v2.1.1**
 
 ---
 

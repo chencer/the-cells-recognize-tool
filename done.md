@@ -2,7 +2,7 @@
 
 ---
 
-## 当前版本：v2.1.0（2026-04-22）✅
+## 当前版本：v2.1.1（2026-04-23）✅
 
 ### 所有已完成功能
 
@@ -46,9 +46,23 @@
 
 ---
 
+---
+
+## v2.1.1 本次修复（2026-04-23）
+
+### 修复内容
+
+- 超宽拼接图识别失败（拼接黑边导致自动直径估算偏小）→ 改为 diameter=120 固定
+- 移除不稳定的自动估算和 tiling 分块逻辑
+- 圆形度过滤阈值 0.5 → 0.3，减少正常细胞误过滤
+- 添加超宽测试图 test_images/wide_test.jpg
+
+---
+
 ## Release 链接
 
-- [v2.1.0](https://github.com/chencer/the-cells-recognize-tool/releases/tag/v2.1.0)（当前最新）
+- [v2.1.1](https://github.com/chencer/the-cells-recognize-tool/releases/tag/v2.1.1)（当前最新）
+- [v2.1.0](https://github.com/chencer/the-cells-recognize-tool/releases/tag/v2.1.0)
 - [v2.0.0](https://github.com/chencer/the-cells-recognize-tool/releases/tag/v2.0.0)
 - [v1.2.0](https://github.com/chencer/the-cells-recognize-tool/releases/tag/v1.2.0)
 - [v1.1.0](https://github.com/chencer/the-cells-recognize-tool/releases/tag/v1.1.0)
