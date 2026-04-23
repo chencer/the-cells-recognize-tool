@@ -140,7 +140,6 @@ class CellAppCP3:
             import torch
             from cellpose import models as cp_models
             import ssl as _ssl
-            from model_cache import load_model_cached
 
             torch.serialization.add_safe_globals([cp_models.CellposeModel])
             import torch.serialization
@@ -153,7 +152,28 @@ class CellAppCP3:
 
             model_path = get_resource_path("cyto3")
             if os.path.exists(model_path):
-                m = load_model_cached(model_path, use_gpu=use_gpu)
+                cache_path = model_path + '.pkl'
+                if (os.path.exists(cache_path) and
+                        os.path.getmtime(cache_path) > os.path.getmtime(model_path)):
+                    try:
+                        m = torch.serialization.load(
+                            cache_path, map_location='cpu', weights_only=False)
+                        if use_gpu and (torch.cuda.is_available() or
+                                        torch.backends.mps.is_available()):
+                            m.net = m.net.cuda() if torch.cuda.is_available() else m.net.to('mps')
+                        print(f"✅ 从缓存加载模型 (cyto3.pkl)")
+                    except Exception as e:
+                        print(f"⚠️ 缓存读取失败，重新加载: {e}")
+                        m = None
+                else:
+                    m = None
+                if m is None:
+                    m = cp_models.CellposeModel(gpu=use_gpu, pretrained_model=model_path)
+                    try:
+                        torch.serialization.save(m, cache_path)
+                        print(f"✅ 模型缓存已保存: cyto3.pkl")
+                    except Exception as e:
+                        print(f"⚠️ 缓存保存失败: {e}")
             else:
                 m = cp_models.Cellpose(gpu=use_gpu, model_type="cyto3")
                 print("✅ 使用系统默认路径加载 cyto3")
