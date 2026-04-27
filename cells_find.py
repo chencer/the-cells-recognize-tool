@@ -44,6 +44,11 @@ def process_image(model, image_path, results_dir):
         print(f"  ❌ 无法读取图片，跳过")
         return
 
+    h, w  = raw_image.shape[:2]
+    large = (w * h) > 2048 * 2048  # 大图走 tile 分块
+    if large:
+        print(f"  大图模式 ({w}x{h})，启用分块处理...")
+
     masks = model.eval(
         raw_image,
         diameter=120,
@@ -51,7 +56,9 @@ def process_image(model, image_path, results_dir):
         flow_threshold=0.95,
         cellprob_threshold=1.0,
         min_size=200,
-        resample=False,
+        resample=not large,
+        tile=large,
+        tile_overlap=0.1,
     )[0]
 
     res_img       = raw_image.copy()
