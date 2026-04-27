@@ -14,9 +14,9 @@
 
 ## 过滤链
 
-1. **Step 1 完整度**：touches=Y 用 `circle_comp >= 0.65`；touches=N 用 `hull_comp >= 0.85`
+1. **Step 1 完整度**：`hull_comp < 0.85` OR `circle_comp < 0.65` 则过滤（两者都检查，不分 touches）
 2. **Step 2 面积**：面积 < 中位数 × 15% 过滤
-3. **Step 3 圆形度**：`circularity < 0.3` 过滤
+3. **Step 3 圆形度**：`circularity < 0.5` 过滤
 
 ## 亮度计算
 
