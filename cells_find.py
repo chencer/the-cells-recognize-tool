@@ -23,7 +23,15 @@ def load_model():
     torch.load = lambda *a, **kw: _ts.load(*a, **kw, weights_only=False)
     ssl._create_default_https_context = ssl._create_unverified_context
 
-    use_gpu = torch.backends.mps.is_available() or torch.cuda.is_available()
+    if torch.cuda.is_available():
+        use_gpu = True
+        print("  设备: CUDA GPU")
+    elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+        use_gpu = True
+        print("  设备: Apple MPS (M系列)")
+    else:
+        use_gpu = False
+        print("  设备: CPU")
     model_path = get_resource_path("cyto3")
     if os.path.exists(model_path):
         m = cp_models.CellposeModel(gpu=use_gpu, pretrained_model=model_path)
