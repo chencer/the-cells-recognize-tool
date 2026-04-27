@@ -23,7 +23,7 @@ def load_model():
     torch.load = lambda *a, **kw: _ts.load(*a, **kw, weights_only=False)
     ssl._create_default_https_context = ssl._create_unverified_context
 
-    use_gpu = torch.backends.mps.is_available() or torch.cuda.is_available()
+    use_gpu = torch.cuda.is_available()  # MPS (M1) 与 cellpose 不稳定，强制 CPU
     model_path = get_resource_path("cyto3")
     if os.path.exists(model_path):
         m = cp_models.CellposeModel(gpu=use_gpu, pretrained_model=model_path)
@@ -51,7 +51,7 @@ def process_image(model, image_path, results_dir):
         flow_threshold=0.95,
         cellprob_threshold=1.0,
         min_size=200,
-        resample=True,
+        resample=False,
     )[0]
 
     res_img       = raw_image.copy()
