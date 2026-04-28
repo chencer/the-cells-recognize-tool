@@ -150,7 +150,7 @@ def process_image(model, image_path, results_dir):
         return
 
     h, w = raw_image.shape[:2]
-    if w > 3000 and h > 3000:
+    if w * h > 3000 * 3000:
         print(f"  大图模式 ({w}x{h})")
         masks = _tile_and_merge(model, raw_image)
     else:
