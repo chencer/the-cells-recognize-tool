@@ -17,7 +17,7 @@ def get_resource_path(relative_path):
 
 # --- 模型加载 ---
 def load_model():
-    print("正在加载模型...")
+    print("正在加载模型...", flush=True)
     torch.serialization.add_safe_globals([cp_models.CellposeModel])
     import torch.serialization as _ts
     torch.load = lambda *a, **kw: _ts.load(*a, **kw, weights_only=False)
@@ -25,20 +25,20 @@ def load_model():
 
     if torch.cuda.is_available():
         use_gpu = True
-        print("  设备: CUDA GPU")
+        print("  设备: CUDA GPU", flush=True)
     elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
         use_gpu = True
-        print("  设备: Apple MPS (M系列)")
+        print("  设备: Apple MPS (M系列)", flush=True)
     else:
         use_gpu = False
-        print("  设备: CPU")
+        print("  设备: CPU", flush=True)
     model_path = get_resource_path("cyto3")
     if os.path.exists(model_path):
         m = cp_models.CellposeModel(gpu=use_gpu, pretrained_model=model_path)
-        print(f"✅ 成功加载本地模型: {model_path}")
+        print(f"✅ 成功加载本地模型: {model_path}", flush=True)
     else:
         m = cp_models.Cellpose(gpu=use_gpu, model_type="cyto3")
-        print("✅ 使用系统默认路径加载 cyto3")
+        print("✅ 使用系统默认路径加载 cyto3", flush=True)
     return m
 
 
@@ -57,14 +57,14 @@ def _tile_and_merge(model, raw_image):
     xs    = origins(W, TW, SX)
     ys    = origins(H, TH, SY)
     total = len(xs) * len(ys)
-    print(f"  裁切为 {len(xs)}x{len(ys)} = {total} 块 ({TW}x{TH}, 重叠20%)")
+    print(f"  裁切为 {len(xs)}x{len(ys)} = {total} 块 ({TW}x{TH}, 重叠20%)", flush=True)
 
     candidates = []
     count = 0
     for y0 in ys:
         for x0 in xs:
             count += 1
-            print(f"  [{count}/{total}] 处理中...")
+            print(f"  [{count}/{total}] 处理中...", flush=True)
             x1   = min(x0 + TW, W)
             y1   = min(y0 + TH, H)
             tile = raw_image[y0:y1, x0:x1]
@@ -82,6 +82,9 @@ def _tile_and_merge(model, raw_image):
                 min_size=200, resample=False, tile=False,
             )[0]
 
+            n_cells = len(np.unique(tile_masks)) - 1
+            print(f"    → {n_cells} 个细胞", flush=True)
+
             for cid in np.unique(tile_masks)[1:]:
                 ly, lx = np.where(tile_masks == cid)
                 valid  = (ly < (y1 - y0)) & (lx < (x1 - x0))   # 去掉补零区域
@@ -93,7 +96,7 @@ def _tile_and_merge(model, raw_image):
                 candidates.append({'gy': gy, 'gx': gx, 'area': len(gy), 'bbox': bbox})
 
     # IoU 去重：重叠 > 0.3 保留较大者
-    print(f"  合并去重中... ({len(candidates)} 个候选细胞)")
+    print(f"  合并去重中... ({len(candidates)} 个候选细胞)", flush=True)
     keep = [True] * len(candidates)
 
     for i in range(len(candidates)):
@@ -131,7 +134,7 @@ def _tile_and_merge(model, raw_image):
                     break
 
     surviving = [c for c, k in zip(candidates, keep) if k]
-    print(f"  合并完成，总细胞数: {len(surviving)}")
+    print(f"  合并完成，总细胞数: {len(surviving)}", flush=True)
 
     merged = np.zeros((H, W), dtype=np.uint16)
     for idx, cell in enumerate(surviving, start=1):
@@ -142,16 +145,16 @@ def _tile_and_merge(model, raw_image):
 # --- 单张图片处理 ---
 def process_image(model, image_path, results_dir):
     stem = os.path.splitext(os.path.basename(image_path))[0]
-    print(f"\n[{stem}] 处理中...")
+    print(f"\n[{stem}] 处理中...", flush=True)
 
     raw_image = cv2.imdecode(np.fromfile(image_path, dtype=np.uint8), cv2.IMREAD_COLOR)
     if raw_image is None:
-        print(f"  ❌ 无法读取图片，跳过")
+        print(f"  ❌ 无法读取图片，跳过", flush=True)
         return
 
     h, w = raw_image.shape[:2]
     if w * h > 3000 * 3000:
-        print(f"  大图模式 ({w}x{h})")
+        print(f"  大图模式 ({w}x{h})", flush=True)
         masks = _tile_and_merge(model, raw_image)
     else:
         masks = model.eval(
@@ -164,11 +167,11 @@ def process_image(model, image_path, results_dir):
             resample=True,
         )[0]
 
-    res_img       = raw_image.copy()
-    gray          = cv2.cvtColor(raw_image, cv2.COLOR_BGR2GRAY)
-    cell_ids      = np.unique(masks)[1:]
+    res_img        = raw_image.copy()
+    gray           = cv2.cvtColor(raw_image, cv2.COLOR_BGR2GRAY)
+    cell_ids       = np.unique(masks)[1:]
     total_detected = len(cell_ids)
-    H_img, W_img  = gray.shape
+    H_img, W_img   = gray.shape
 
     # ── Step 1: 完整度过滤 ────────────────────────────────────────────────────
     candidates = []
@@ -195,12 +198,14 @@ def process_image(model, image_path, results_dir):
             "cid": cid, "mask": mask, "mask_area": mask_area,
             "contours": contours, "perimeter": perimeter, "er": er,
         })
+    print(f"  [Step1] 完整度过滤: {len(candidates)} / {total_detected}", flush=True)
 
     # ── Step 2: 面积过滤 ──────────────────────────────────────────────────────
     if candidates:
         median_area = float(np.median([c["mask_area"] for c in candidates]))
         area_thresh = median_area * 0.15
         candidates  = [c for c in candidates if c["mask_area"] >= area_thresh]
+    print(f"  [Step2] 面积过滤: {len(candidates)}", flush=True)
 
     # ── Step 3: 圆形度过滤 ────────────────────────────────────────────────────
     filtered = []
@@ -210,6 +215,7 @@ def process_image(model, image_path, results_dir):
         if circ >= 0.5:
             filtered.append(c)
     candidates = filtered
+    print(f"  [Step3] 圆形度过滤: {len(candidates)}", flush=True)
 
     # ── 亮度计算 ──────────────────────────────────────────────────────────────
     cell_list = []
@@ -239,6 +245,7 @@ def process_image(model, image_path, results_dir):
             })
 
     cell_list.sort(key=lambda x: x["brightness"], reverse=True)
+    print(f"  [Step4] 有效细胞: {len(cell_list)}", flush=True)
 
     # ── 标注结果图 ────────────────────────────────────────────────────────────
     if cell_list:
@@ -266,8 +273,10 @@ def process_image(model, image_path, results_dir):
             label = f"{rank} | {int(cell['brightness'])}"
             cv2.putText(res_img, label, (cx + 8, cy - 8),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+    print(f"  [Step5] 标注完成", flush=True)
 
     # ── 保存结果 ──────────────────────────────────────────────────────────────
+    print(f"  [Step6] 保存中...", flush=True)
     save_dir = os.path.join(results_dir, stem)
     os.makedirs(save_dir, exist_ok=True)
 
@@ -292,8 +301,8 @@ def process_image(model, image_path, results_dir):
     if top1:
         cx1, cy1 = top1["pos"]
         summary += f"  #1 ({cx1}, {cy1}) 亮度={int(top1['brightness'])}"
-    print(summary)
-    print(f"  → 已保存到 results/{stem}/")
+    print(summary, flush=True)
+    print(f"  → 已保存到 results/{stem}/", flush=True)
 
 
 # --- 主流程 ---
@@ -312,16 +321,16 @@ def main():
     ]
 
     if not images:
-        print("input/ 目录为空，请放入图片后重新运行。")
+        print("input/ 目录为空，请放入图片后重新运行。", flush=True)
         return
 
-    print(f"发现 {len(images)} 张图片：")
+    print(f"发现 {len(images)} 张图片：", flush=True)
     for img in images:
-        print(f"  {os.path.basename(img)}")
+        print(f"  {os.path.basename(img)}", flush=True)
 
     ans = input("\n按 y 开始处理：").strip().lower()
     if ans != 'y':
-        print("已取消。")
+        print("已取消。", flush=True)
         return
 
     model   = load_model()
@@ -331,7 +340,7 @@ def main():
         process_image(model, img_path, results_dir)
 
     elapsed = time.time() - t_start
-    print(f"\n✅ 全部完成，共耗时 {elapsed:.1f}s")
+    print(f"\n✅ 全部完成，共耗时 {elapsed:.1f}s", flush=True)
 
 
 if __name__ == "__main__":
