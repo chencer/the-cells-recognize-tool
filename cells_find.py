@@ -42,6 +42,103 @@ def load_model():
     return m
 
 
+# --- 大图分块识别 ---
+def _tile_and_merge(model, raw_image):
+    H, W   = raw_image.shape[:2]
+    TW, TH = 2048, 1080
+    OX, OY = int(TW * 0.2), int(TH * 0.2)   # 重叠像素
+    SX, SY = TW - OX, TH - OY                 # 步长
+
+    def origins(total, tile, step):
+        pts = list(range(0, total - tile, step))
+        pts.append(max(0, total - tile))
+        return sorted(set(pts))
+
+    xs    = origins(W, TW, SX)
+    ys    = origins(H, TH, SY)
+    total = len(xs) * len(ys)
+    print(f"  裁切为 {len(xs)}x{len(ys)} = {total} 块 ({TW}x{TH}, 重叠20%)")
+
+    candidates = []
+    count = 0
+    for y0 in ys:
+        for x0 in xs:
+            count += 1
+            print(f"  [{count}/{total}] 处理中...")
+            x1   = min(x0 + TW, W)
+            y1   = min(y0 + TH, H)
+            tile = raw_image[y0:y1, x0:x1]
+
+            # 边缘块补零到标准尺寸
+            th, tw = tile.shape[:2]
+            if th < TH or tw < TW:
+                pad = np.zeros((TH, TW, raw_image.shape[2]), dtype=raw_image.dtype)
+                pad[:th, :tw] = tile
+                tile = pad
+
+            tile_masks = model.eval(
+                tile, diameter=120, channels=[0, 0],
+                flow_threshold=0.95, cellprob_threshold=1.0,
+                min_size=200, resample=False, tile=False,
+            )[0]
+
+            for cid in np.unique(tile_masks)[1:]:
+                ly, lx = np.where(tile_masks == cid)
+                valid  = (ly < (y1 - y0)) & (lx < (x1 - x0))   # 去掉补零区域
+                gy     = (ly[valid] + y0).astype(np.int32)
+                gx     = (lx[valid] + x0).astype(np.int32)
+                if len(gy) < 10:
+                    continue
+                bbox = (int(gy.min()), int(gx.min()), int(gy.max()), int(gx.max()))
+                candidates.append({'gy': gy, 'gx': gx, 'area': len(gy), 'bbox': bbox})
+
+    # IoU 去重：重叠 > 0.3 保留较大者
+    print(f"  合并去重中... ({len(candidates)} 个候选细胞)")
+    keep = [True] * len(candidates)
+
+    for i in range(len(candidates)):
+        if not keep[i]:
+            continue
+        bi = candidates[i]['bbox']
+        for j in range(i + 1, len(candidates)):
+            if not keep[j]:
+                continue
+            bj = candidates[j]['bbox']
+            if bi[2] < bj[0] or bj[2] < bi[0] or bi[3] < bj[1] or bj[3] < bi[1]:
+                continue  # bbox 不重叠
+            iy1 = max(bi[0], bj[0]); ix1 = max(bi[1], bj[1])
+            iy2 = min(bi[2], bj[2]); ix2 = min(bi[3], bj[3])
+            if iy2 <= iy1 or ix2 <= ix1:
+                continue
+            rh, rw = iy2 - iy1, ix2 - ix1
+            mi = np.zeros((rh, rw), dtype=bool)
+            mj = np.zeros((rh, rw), dtype=bool)
+            ci = candidates[i]
+            vi = (ci['gy'] >= iy1) & (ci['gy'] < iy2) & (ci['gx'] >= ix1) & (ci['gx'] < ix2)
+            mi[ci['gy'][vi] - iy1, ci['gx'][vi] - ix1] = True
+            cj = candidates[j]
+            vj = (cj['gy'] >= iy1) & (cj['gy'] < iy2) & (cj['gx'] >= ix1) & (cj['gx'] < ix2)
+            mj[cj['gy'][vj] - iy1, cj['gx'][vj] - ix1] = True
+            inter = int(np.sum(mi & mj))
+            if inter == 0:
+                continue
+            iou = inter / (ci['area'] + cj['area'] - inter)
+            if iou > 0.3:
+                if ci['area'] >= cj['area']:
+                    keep[j] = False
+                else:
+                    keep[i] = False
+                    break
+
+    surviving = [c for c, k in zip(candidates, keep) if k]
+    print(f"  合并完成，总细胞数: {len(surviving)}")
+
+    merged = np.zeros((H, W), dtype=np.uint16)
+    for idx, cell in enumerate(surviving, start=1):
+        merged[cell['gy'], cell['gx']] = idx
+    return merged
+
+
 # --- 单张图片处理 ---
 def process_image(model, image_path, results_dir):
     stem = os.path.splitext(os.path.basename(image_path))[0]
@@ -52,22 +149,20 @@ def process_image(model, image_path, results_dir):
         print(f"  ❌ 无法读取图片，跳过")
         return
 
-    h, w  = raw_image.shape[:2]
-    large = (w * h) > 2048 * 2048  # 大图走 tile 分块
-    if large:
-        print(f"  大图模式 ({w}x{h})，启用分块处理...")
-
-    masks = model.eval(
-        raw_image,
-        diameter=120,
-        channels=[0, 0],
-        flow_threshold=0.95,
-        cellprob_threshold=1.0,
-        min_size=200,
-        resample=not large,
-        tile=large,
-        tile_overlap=0.1,
-    )[0]
+    h, w = raw_image.shape[:2]
+    if w > 3000 and h > 3000:
+        print(f"  大图模式 ({w}x{h})")
+        masks = _tile_and_merge(model, raw_image)
+    else:
+        masks = model.eval(
+            raw_image,
+            diameter=120,
+            channels=[0, 0],
+            flow_threshold=0.95,
+            cellprob_threshold=1.0,
+            min_size=200,
+            resample=True,
+        )[0]
 
     res_img       = raw_image.copy()
     gray          = cv2.cvtColor(raw_image, cv2.COLOR_BGR2GRAY)
