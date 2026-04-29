@@ -190,11 +190,28 @@ def _filter_and_rank_tile(candidates, raw_image):
         if len(cell_pixels) > 50:
             k    = max(1, int(len(cell_pixels) * 0.05))
             peak = float(np.mean(np.partition(cell_pixels, -k)[-k:]))
+
+            # 从 gy/gx 重建局部 mask，提取 contours 后映射回全图坐标
+            bbox    = c['bbox']
+            ly0, lx0 = bbox[0], bbox[1]
+            lh      = bbox[2] - ly0 + 1
+            lw      = bbox[3] - lx0 + 1
+            local_m = np.zeros((lh, lw), dtype=np.uint8)
+            local_m[gy - ly0, gx - lx0] = 1
+            contours_local, _ = cv2.findContours(
+                local_m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            # 偏移到全图坐标
+            contours_global = [
+                (cnt + np.array([[[lx0, ly0]]])).astype(np.int32)
+                for cnt in contours_local
+            ]
+
             cell_list.append({
                 "brightness": peak,
                 "pos": (cx_c, cy_c),
                 "gy": gy, "gx": gx,
                 "er": er,
+                "contours": contours_global,
             })
 
     cell_list.sort(key=lambda x: x["brightness"], reverse=True)
@@ -306,45 +323,29 @@ def process_image(model, image_path, results_dir):
         cell_list      = _filter_and_rank_mask(masks, raw_image)
         total_detected = len(np.unique(masks)) - 1
 
-    # ── 标注结果图 ────────────────────────────────────────────────────────────
+    # ── 标注结果图（大图/小图统一走 drawContours）────────────────────────────
     if cell_list:
         top3   = cell_list[:3]
         others = cell_list[3:]
 
-        if is_large:
-            # 非 top3：黄色圆圈
-            for cell in others:
-                cx, cy = cell["pos"]
-                cv2.circle(res_img, (cx, cy), max(1, int(cell["er"])), (0, 255, 255), 2)
+        # 非 top3：黄色轮廓 + 编号
+        for idx, cell in enumerate(others, start=4):
+            cx, cy = cell["pos"]
+            cv2.drawContours(res_img, cell["contours"], -1, (0, 255, 255), 2)
+            cv2.putText(res_img, str(idx), (cx + 6, cy - 6),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (220, 220, 220), 1)
 
-            # 暗环遮罩：用 gy/gx 直接操作像素
+        # 暗环遮罩
+        if is_large:
             for cell in cell_list:
-                cx, cy  = cell["pos"]
-                er      = cell["er"]
-                ir      = max(1, int(er * 0.8))
-                gy, gx  = cell["gy"], cell["gx"]
-                dist    = np.sqrt((gy - cy) ** 2 + (gx - cx) ** 2)
-                ring    = dist >= ir
+                cx, cy = cell["pos"]
+                ir     = max(1, int(cell["er"] * 0.8))
+                gy, gx = cell["gy"], cell["gx"]
+                dist   = np.sqrt((gy - cy) ** 2 + (gx - cx) ** 2)
+                ring   = dist >= ir
                 res_img[gy[ring], gx[ring]] = (
                     res_img[gy[ring], gx[ring]] * 0.6).astype(np.uint8)
-
-            # top3：绿色圆圈 + 中心点 + 标签
-            for rank, cell in enumerate(top3, start=1):
-                cx, cy = cell["pos"]
-                cv2.circle(res_img, (cx, cy), max(1, int(cell["er"])), (0, 255, 0), 2)
-                cv2.circle(res_img, (cx, cy), 5, (0, 255, 0), -1)
-                label = f"{rank} | {int(cell['brightness'])}"
-                cv2.putText(res_img, label, (cx + 8, cy - 8),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
         else:
-            # 非 top3：黄色轮廓 + 编号
-            for idx, cell in enumerate(others, start=4):
-                cx, cy = cell["pos"]
-                cv2.drawContours(res_img, cell["contours"], -1, (0, 255, 255), 2)
-                cv2.putText(res_img, str(idx), (cx + 6, cy - 6),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (220, 220, 220), 1)
-
-            # 暗环遮罩
             for cell in cell_list:
                 cx, cy  = cell["pos"]
                 er_int  = max(1, int(cell["er"]))
@@ -356,8 +357,8 @@ def process_image(model, image_path, results_dir):
                 ring = (outer_m > 0) & (inner_m == 0) & (cell["mask"] > 0)
                 res_img[ring] = (res_img[ring] * 0.6).astype(np.uint8)
 
-            # top3：绿色轮廓 + 中心点 + 标签
-            for rank, cell in enumerate(top3, start=1):
+        # top3：绿色轮廓 + 中心点 + 标签
+        for rank, cell in enumerate(top3, start=1):
                 cx, cy = cell["pos"]
                 cv2.drawContours(res_img, cell["contours"], -1, (0, 255, 0), 2)
                 cv2.circle(res_img, (cx, cy), 5, (0, 255, 0), -1)
