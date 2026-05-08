@@ -44,7 +44,7 @@ def load_model():
 
 
 # --- 大图分块识别，返回候选细胞列表 ---
-def _tile_and_merge(model, raw_image):
+def _tile_and_merge(model, raw_image, tiles_dir=None):
     H, W   = raw_image.shape[:2]
     TW, TH = 2048, 1080
     OX, OY = int(TW * 0.2), int(TH * 0.2)
@@ -75,6 +75,10 @@ def _tile_and_merge(model, raw_image):
                 pad = np.zeros((TH, TW, raw_image.shape[2]), dtype=raw_image.dtype)
                 pad[:th, :tw] = tile
                 tile = pad
+
+            if tiles_dir:
+                tile_path = os.path.join(tiles_dir, f"tile_{count:04d}_x{x0}_y{y0}.png")
+                cv2.imencode('.png', tile[:(y1-y0), :(x1-x0)])[1].tofile(tile_path)
 
             tile_masks = model.eval(
                 tile, diameter=120, channels=[0, 0],
@@ -311,7 +315,10 @@ def process_image(model, image_path, results_dir):
 
     if is_large:
         print(f"  大图模式 ({w}x{h})", flush=True)
-        tile_candidates = _tile_and_merge(model, raw_image)
+        tiles_dir = os.path.join(results_dir, stem, "tiles")
+        os.makedirs(tiles_dir, exist_ok=True)
+        print(f"  分块小图将保存到 tiles/", flush=True)
+        tile_candidates = _tile_and_merge(model, raw_image, tiles_dir=tiles_dir)
         cell_list       = _filter_and_rank_tile(tile_candidates, raw_image)
         total_detected  = len(tile_candidates)
     else:
