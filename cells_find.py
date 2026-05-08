@@ -319,6 +319,16 @@ def process_image(model, image_path, results_dir):
         os.makedirs(tiles_dir, exist_ok=True)
         print(f"  分块小图将保存到 tiles/", flush=True)
         tile_candidates = _tile_and_merge(model, raw_image, tiles_dir=tiles_dir)
+        # --- 诊断：输出原始识别点 ---
+        diag_img = raw_image.copy()
+        for cand in tile_candidates:
+            cy = int(np.mean(cand['gy']))
+            cx = int(np.mean(cand['gx']))
+            cv2.circle(diag_img, (cx, cy), 15, (0, 255, 0), -1)
+        diag_path = os.path.join(results_dir, stem, f"{stem}_raw_detections.png")
+        cv2.imencode('.png', diag_img)[1].tofile(diag_path)
+        print(f"  诊断图已保存: {len(tile_candidates)} 个原始检测点", flush=True)
+        # --- 诊断结束 ---
         cell_list       = _filter_and_rank_tile(tile_candidates, raw_image)
         total_detected  = len(tile_candidates)
     else:
@@ -327,6 +337,18 @@ def process_image(model, image_path, results_dir):
             flow_threshold=0.95, cellprob_threshold=1.0,
             min_size=200, resample=True,
         )[0]
+        # --- 诊断：输出原始识别点 ---
+        diag_img = raw_image.copy()
+        cell_ids_raw = np.unique(masks)[1:]
+        for cid in cell_ids_raw:
+            ys_c, xs_c = np.where(masks == cid)
+            cy = int(np.mean(ys_c))
+            cx = int(np.mean(xs_c))
+            cv2.circle(diag_img, (cx, cy), 15, (0, 255, 0), -1)
+        diag_path = os.path.join(results_dir, stem, f"{stem}_raw_detections.png")
+        cv2.imencode('.png', diag_img)[1].tofile(diag_path)
+        print(f"  诊断图已保存: {len(cell_ids_raw)} 个原始检测点", flush=True)
+        # --- 诊断结束 ---
         cell_list      = _filter_and_rank_mask(masks, raw_image)
         total_detected = len(np.unique(masks)) - 1
 
