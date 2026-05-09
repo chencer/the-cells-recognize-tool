@@ -320,7 +320,6 @@ def process_image(model, image_path, results_dir):
 
     h, w     = raw_image.shape[:2]
     H_img, W_img = h, w
-    res_img  = raw_image.copy()
     is_large = w * h > 3000 * 3000
 
     save_dir = os.path.join(results_dir, stem)
@@ -367,6 +366,8 @@ def process_image(model, image_path, results_dir):
 
         cell_list      = _filter_and_rank_mask(masks, raw_image)
         total_detected = len(np.unique(masks)) - 1
+
+    res_img = raw_image.copy()
 
     # ── 标注结果图 ────────────────────────────────────────────────────────────
     if cell_list:
