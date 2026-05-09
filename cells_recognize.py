@@ -58,6 +58,10 @@ def _tile_and_merge(model, raw_image, tiles_dir=None):
     xs    = origins(W, TW, SX)
     ys    = origins(H, TH, SY)
     total = len(xs) * len(ys)
+    print(f"  图片尺寸: {W}x{H}", flush=True)
+    print(f"  块尺寸: {TW}x{TH}  步长: SX={SX} SY={SY}  重叠: OX={OX} OY={OY}", flush=True)
+    print(f"  X起点列表({len(xs)}个): {xs}", flush=True)
+    print(f"  Y起点列表({len(ys)}个): {ys}", flush=True)
     print(f"  裁切为 {len(xs)}x{len(ys)} = {total} 块 ({TW}x{TH}, 重叠20%)", flush=True)
 
     candidates = []
@@ -65,13 +69,14 @@ def _tile_and_merge(model, raw_image, tiles_dir=None):
     for y0 in ys:
         for x0 in xs:
             count += 1
-            print(f"  [{count}/{total}] 处理中...", flush=True)
             x1   = min(x0 + TW, W)
             y1   = min(y0 + TH, H)
+            print(f"  [{count}/{total}] 裁切: x={x0}-{x1} y={y0}-{y1} 实际尺寸={x1-x0}x{y1-y0}", flush=True)
             tile = raw_image[y0:y1, x0:x1]
 
             th, tw = tile.shape[:2]
             if th < TH or tw < TW:
+                print(f"    → 边缘块，补零到 {TW}x{TH}", flush=True)
                 pad = np.zeros((TH, TW, raw_image.shape[2]), dtype=raw_image.dtype)
                 pad[:th, :tw] = tile
                 tile = pad
@@ -80,17 +85,21 @@ def _tile_and_merge(model, raw_image, tiles_dir=None):
                 tile_path = os.path.join(tiles_dir, f"tile_{count:04d}_x{x0}_y{y0}.png")
                 cv2.imencode('.png', tile[:(y1-y0), :(x1-x0)])[1].tofile(tile_path)
 
+            print(f"    → 送入模型: {tile.shape}", flush=True)
             tile_masks = model.eval(
                 tile, diameter=120, channels=[0, 0],
                 flow_threshold=0.95, cellprob_threshold=1.0,
                 min_size=200, resample=False, tile=False,
             )[0]
 
-            if torch.backends.mps.is_available():
-                torch.mps.empty_cache()
-
             n_cells = len(np.unique(tile_masks)) - 1
-            print(f"    → {n_cells} 个细胞", flush=True)
+            print(f"    → 识别完成: {n_cells} 个细胞", flush=True)
+            if torch.backends.mps.is_available():
+                allocated = torch.mps.current_allocated_memory() / 1024**3
+                print(f"    → MPS 显存: {allocated:.2f} GB", flush=True)
+                torch.mps.empty_cache()
+                after = torch.mps.current_allocated_memory() / 1024**3
+                print(f"    → 清理后: {after:.2f} GB", flush=True)
 
             for cid in np.unique(tile_masks)[1:]:
                 ly, lx = np.where(tile_masks == cid)
