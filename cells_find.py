@@ -44,7 +44,7 @@ def load_model():
 
 
 # --- 大图分块识别，返回候选细胞列表 ---
-def _tile_and_merge(model, raw_image, tiles_dir=None):
+def _tile_and_merge(model, raw_image):
     H, W   = raw_image.shape[:2]
     TW, TH = 2048, 1080
     OX, OY = int(TW * 0.2), int(TH * 0.2)
@@ -75,10 +75,6 @@ def _tile_and_merge(model, raw_image, tiles_dir=None):
                 pad = np.zeros((TH, TW, raw_image.shape[2]), dtype=raw_image.dtype)
                 pad[:th, :tw] = tile
                 tile = pad
-
-            if tiles_dir:
-                tile_path = os.path.join(tiles_dir, f"tile_{count:04d}_x{x0}_y{y0}.png")
-                cv2.imencode('.png', tile[:(y1-y0), :(x1-x0)])[1].tofile(tile_path)
 
             tile_masks = model.eval(
                 tile, diameter=120, channels=[0, 0],
@@ -338,10 +334,7 @@ def process_image(model, image_path, results_dir, top_n=3):
             is_large       = False
         else:
             print(f"  大图模式启用", flush=True)
-            tiles_dir = os.path.join(results_dir, stem, "tiles")
-            os.makedirs(tiles_dir, exist_ok=True)
-            print(f"  分块小图将保存到 tiles/", flush=True)
-            tile_candidates = _tile_and_merge(model, raw_image, tiles_dir=tiles_dir)
+            tile_candidates = _tile_and_merge(model, raw_image)
             # --- 诊断：输出原始识别点 ---
             diag_img = raw_image.copy()
             for cand in tile_candidates:
@@ -433,6 +426,22 @@ def process_image(model, image_path, results_dir, top_n=3):
         for i, cell in enumerate(cell_list[:top_n], start=1):
             cx, cy = cell["pos"]
             f.write(f"{i},{cx},{cy},{int(cell['brightness'])}\n")
+
+    # 保存 top 细胞裁剪图
+    for rank, cell in enumerate(cell_list[:top_n], start=1):
+        cx, cy = cell["pos"]
+        er = int(cell["er"])
+        pad = er * 2
+        y1 = max(0, cy - pad)
+        y2 = min(H_img, cy + pad)
+        x1 = max(0, cx - pad)
+        x2 = min(W_img, cx + pad)
+        crop = res_img[y1:y2, x1:x2].copy()
+        cv2.putText(crop, f"Top {rank}", (10, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+        crop_path = os.path.join(save_dir, f"top{rank}.png")
+        cv2.imencode('.png', crop)[1].tofile(crop_path)
+        print(f"  Top{rank} 裁剪图已保存", flush=True)
 
     with open(os.path.join(save_dir, f"{stem}_data.csv"), 'w', encoding='utf-8') as f:
         f.write("编号,直径(px),坐标X,坐标Y,亮度值\n")
