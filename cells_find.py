@@ -299,7 +299,7 @@ def _filter_and_rank_mask(masks, raw_image):
 
 
 # --- 单张图片处理 ---
-def process_image(model, image_path, results_dir):
+def process_image(model, image_path, results_dir, top_n=3):
     stem = os.path.splitext(os.path.basename(image_path))[0]
     print(f"\n[{stem}] 处理中...", flush=True)
 
@@ -314,23 +314,46 @@ def process_image(model, image_path, results_dir):
     is_large = w * h > 3000 * 3000
 
     if is_large:
-        print(f"  大图模式 ({w}x{h})", flush=True)
-        tiles_dir = os.path.join(results_dir, stem, "tiles")
-        os.makedirs(tiles_dir, exist_ok=True)
-        print(f"  分块小图将保存到 tiles/", flush=True)
-        tile_candidates = _tile_and_merge(model, raw_image, tiles_dir=tiles_dir)
-        # --- 诊断：输出原始识别点 ---
-        diag_img = raw_image.copy()
-        for cand in tile_candidates:
-            cy = int(np.mean(cand['gy']))
-            cx = int(np.mean(cand['gx']))
-            cv2.circle(diag_img, (cx, cy), 15, (0, 255, 0), -1)
-        diag_path = os.path.join(results_dir, stem, f"{stem}_raw_detections.png")
-        cv2.imencode('.png', diag_img)[1].tofile(diag_path)
-        print(f"  诊断图已保存: {len(tile_candidates)} 个原始检测点", flush=True)
-        # --- 诊断结束 ---
-        cell_list       = _filter_and_rank_tile(tile_candidates, raw_image)
-        total_detected  = len(tile_candidates)
+        print(f"  检测到大图 ({w}x{h})，是否使用大图分块模式？(y/n)", flush=True)
+        use_tile = input("  ").strip().lower() == 'y'
+        if not use_tile:
+            print(f"  整图模式", flush=True)
+            masks = model.eval(
+                raw_image, diameter=120, channels=[0, 0],
+                flow_threshold=0.95, cellprob_threshold=1.0,
+                min_size=200, resample=True,
+            )[0]
+            diag_img = raw_image.copy()
+            cell_ids_raw = np.unique(masks)[1:]
+            for cid in cell_ids_raw:
+                ys_c, xs_c = np.where(masks == cid)
+                cy = int(np.mean(ys_c))
+                cx = int(np.mean(xs_c))
+                cv2.circle(diag_img, (cx, cy), 15, (0, 255, 0), -1)
+            diag_path = os.path.join(results_dir, stem, f"{stem}_raw_detections.png")
+            cv2.imencode('.png', diag_img)[1].tofile(diag_path)
+            print(f"  诊断图已保存: {len(cell_ids_raw)} 个原始检测点", flush=True)
+            cell_list      = _filter_and_rank_mask(masks, raw_image)
+            total_detected = len(np.unique(masks)) - 1
+            is_large       = False
+        else:
+            print(f"  大图模式启用", flush=True)
+            tiles_dir = os.path.join(results_dir, stem, "tiles")
+            os.makedirs(tiles_dir, exist_ok=True)
+            print(f"  分块小图将保存到 tiles/", flush=True)
+            tile_candidates = _tile_and_merge(model, raw_image, tiles_dir=tiles_dir)
+            # --- 诊断：输出原始识别点 ---
+            diag_img = raw_image.copy()
+            for cand in tile_candidates:
+                cy = int(np.mean(cand['gy']))
+                cx = int(np.mean(cand['gx']))
+                cv2.circle(diag_img, (cx, cy), 15, (0, 255, 0), -1)
+            diag_path = os.path.join(results_dir, stem, f"{stem}_raw_detections.png")
+            cv2.imencode('.png', diag_img)[1].tofile(diag_path)
+            print(f"  诊断图已保存: {len(tile_candidates)} 个原始检测点", flush=True)
+            # --- 诊断结束 ---
+            cell_list       = _filter_and_rank_tile(tile_candidates, raw_image)
+            total_detected  = len(tile_candidates)
     else:
         masks = model.eval(
             raw_image, diameter=120, channels=[0, 0],
@@ -354,11 +377,11 @@ def process_image(model, image_path, results_dir):
 
     # ── 标注结果图（大图/小图统一走 drawContours）────────────────────────────
     if cell_list:
-        top3   = cell_list[:3]
-        others = cell_list[3:]
+        top3   = cell_list[:top_n]
+        others = cell_list[top_n:]
 
-        # 非 top3：黄色轮廓 + 编号
-        for idx, cell in enumerate(others, start=4):
+        # 非 top：黄色轮廓 + 编号
+        for idx, cell in enumerate(others, start=top_n+1):
             cx, cy = cell["pos"]
             cv2.drawContours(res_img, cell["contours"], -1, (0, 255, 255), 2)
             cv2.putText(res_img, str(idx), (cx + 6, cy - 6),
@@ -405,9 +428,9 @@ def process_image(model, image_path, results_dir):
     cv2.imencode('.png', res_img)[1].tofile(
         os.path.join(save_dir, f"{stem}_result.png"))
 
-    with open(os.path.join(save_dir, f"{stem}_top3.csv"), 'w', encoding='utf-8') as f:
+    with open(os.path.join(save_dir, f"{stem}_top{top_n}.csv"), 'w', encoding='utf-8') as f:
         f.write("排名,坐标X,坐标Y,亮度值\n")
-        for i, cell in enumerate(cell_list[:3], start=1):
+        for i, cell in enumerate(cell_list[:top_n], start=1):
             cx, cy = cell["pos"]
             f.write(f"{i},{cx},{cy},{int(cell['brightness'])}\n")
 
@@ -455,11 +478,15 @@ def main():
         print("已取消。", flush=True)
         return
 
+    top_n_str = input("输入 Top 排行数量（默认3）：").strip()
+    top_n = int(top_n_str) if top_n_str.isdigit() and int(top_n_str) > 0 else 3
+    print(f"  Top 排行: {top_n}", flush=True)
+
     model   = load_model()
     t_start = time.time()
 
     for img_path in images:
-        process_image(model, img_path, results_dir)
+        process_image(model, img_path, results_dir, top_n=top_n)
 
     elapsed = time.time() - t_start
     print(f"\n✅ 全部完成，共耗时 {elapsed:.1f}s", flush=True)
