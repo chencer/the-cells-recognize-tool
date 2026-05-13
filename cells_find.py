@@ -462,6 +462,8 @@ def process_image(model, image_path, results_dir, settings):
             cx, cy = cell["pos"]
             f.write(f"{i},{cx},{cy},{int(cell['brightness'])}\n")
 
+    crop_dir = os.path.join(save_dir, "crop")
+    os.makedirs(crop_dir, exist_ok=True)
     for rank, cell in enumerate(cell_list[:top_n], start=1):
         cx, cy = cell["pos"]
         pad    = int(cell["er"] * settings['crop_pad'])
@@ -473,7 +475,7 @@ def process_image(model, image_path, results_dir, settings):
         cv2.putText(crop, f"Top {rank}", (10, 30),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
         cv2.imencode('.png', crop)[1].tofile(
-            os.path.join(save_dir, f"top{rank}.png"))
+            os.path.join(crop_dir, f"top{rank}.png"))
         print(f"  Top{rank} 裁剪图已保存", flush=True)
 
     with open(os.path.join(save_dir, f"{stem}_data.csv"), 'w', encoding='utf-8') as f:
