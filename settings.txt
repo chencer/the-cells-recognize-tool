@@ -1,0 +1,35 @@
+# CellAppCP3 参数配置
+# 修改后保存即可，下次运行自动读取
+
+# === Cellpose 模型参数 ===
+diameter = 120
+flow_threshold = 0.95
+cellprob_threshold = 1.0
+min_size = 200
+resample = 0
+niter = 200
+
+# === 过滤参数 ===
+hull_comp = 0.85
+circle_comp = 0.65
+dark_threshold = 15
+area_ratio = 0.15
+circularity = 0.5
+min_pixels = 50
+brightness_top_pct = 0.05
+
+# === Top 排行 ===
+top_n = 3
+
+# === 大图模式 (1=分块, 0=整图) ===
+large_mode = 1
+
+# === 分块尺寸 ===
+tile_w = 2048
+tile_h = 1080
+tile_overlap = 0.2
+
+# === 输出样式 ===
+crop_pad = 2.0
+contour_thickness = 2
+font_scale = 0.7
