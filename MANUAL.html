@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CellAppCP3 使用手册</title>
+<style>
+  /* === Design System: OLED Dark + Knowledge Base Blue === */
+  /* ui-ux-pro-max: Dark Mode OLED + Knowledge Base/Documentation palette */
+  :root {
+    --bg:           #000000;
+    --bg-surface:   #121212;
+    --bg-card:      #1a1a1a;
+    --bg-muted:     #1e1e1e;
+    --sidebar-w:    260px;
+    --text:         #e8e8e8;
+    --text-muted:   #8a8a8a;
+    --accent:       #2563EB;
+    --accent-light: #3b82f6;
+    --accent-glow:  rgba(37,99,235,0.15);
+    --green:        #22c55e;
+    --amber:        #f59e0b;
+    --purple:       #a855f7;
+    --border:       rgba(255,255,255,0.07);
+    --radius:       8px;
+    --font:         -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --font-mono:    'JetBrains Mono', 'Fira Code', monospace;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 14px;
+    line-height: 1.7;
+    display: flex;
+    min-height: 100vh;
+  }
+
+  /* === Sidebar === */
+  nav {
+    width: var(--sidebar-w);
+    min-width: var(--sidebar-w);
+    background: var(--bg-surface);
+    border-right: 1px solid var(--border);
+    padding: 24px 0;
+    position: fixed;
+    top: 0; left: 0;
+    height: 100vh;
+    overflow-y: auto;
+  }
+
+  .nav-logo {
+    padding: 0 20px 20px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 16px;
+  }
+
+  .nav-logo h1 {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--text);
+    letter-spacing: 0.02em;
+  }
+
+  .nav-logo span {
+    font-size: 11px;
+    color: var(--accent-light);
+    font-family: var(--font-mono);
+  }
+
+  .nav-section {
+    padding: 4px 12px;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--text-muted);
+    margin: 12px 0 4px;
+  }
+
+  nav a {
+    display: block;
+    padding: 7px 20px;
+    color: var(--text-muted);
+    text-decoration: none;
+    font-size: 13px;
+    border-radius: 0;
+    transition: all 0.15s;
+    border-left: 2px solid transparent;
+  }
+
+  nav a:hover {
+    color: var(--text);
+    background: rgba(255,255,255,0.04);
+    border-left-color: var(--accent);
+  }
+
+  nav a.active {
+    color: var(--accent-light);
+    background: var(--accent-glow);
+    border-left-color: var(--accent);
+  }
+
+  /* === Main Content === */
+  main {
+    margin-left: var(--sidebar-w);
+    flex: 1;
+    padding: 48px 56px;
+    max-width: 900px;
+  }
+
+  .page-hero {
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 32px;
+    margin-bottom: 48px;
+  }
+
+  .badge {
+    display: inline-block;
+    background: var(--accent-glow);
+    color: var(--accent-light);
+    border: 1px solid rgba(37,99,235,0.3);
+    border-radius: 100px;
+    padding: 3px 10px;
+    font-size: 11px;
+    font-family: var(--font-mono);
+    margin-bottom: 12px;
+  }
+
+  .page-hero h1 {
+    font-size: 30px;
+    font-weight: 700;
+    color: #fff;
+    margin-bottom: 10px;
+    line-height: 1.3;
+  }
+
+  .page-hero p {
+    color: var(--text-muted);
+    font-size: 15px;
+    max-width: 560px;
+  }
+
+  /* === Section === */
+  section {
+    margin-bottom: 56px;
+    scroll-margin-top: 24px;
+  }
+
+  section h2 {
+    font-size: 20px;
+    font-weight: 700;
+    color: #fff;
+    margin-bottom: 20px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  section h3 {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+    margin: 24px 0 10px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  section h3::before {
+    content: '';
+    display: inline-block;
+    width: 3px;
+    height: 14px;
+    border-radius: 2px;
+    background: var(--accent);
+  }
+
+  p { color: var(--text-muted); margin-bottom: 12px; }
+
+  /* === Quick Start Steps === */
+  .steps { display: flex; flex-direction: column; gap: 12px; }
+
+  .step {
+    display: flex;
+    gap: 16px;
+    align-items: flex-start;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px 20px;
+    transition: border-color 0.2s;
+  }
+
+  .step:hover { border-color: rgba(37,99,235,0.35); }
+
+  .step-num {
+    width: 28px;
+    height: 28px;
+    min-width: 28px;
+    border-radius: 50%;
+    background: var(--accent);
+    color: #fff;
+    font-weight: 700;
+    font-size: 13px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .step-body strong {
+    display: block;
+    color: var(--text);
+    font-size: 14px;
+    margin-bottom: 4px;
+  }
+
+  .step-body span { color: var(--text-muted); font-size: 13px; }
+
+  code {
+    background: rgba(255,255,255,0.07);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 6px;
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: #7dd3fc;
+  }
+
+  pre {
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px 20px;
+    font-family: var(--font-mono);
+    font-size: 13px;
+    color: #7dd3fc;
+    overflow-x: auto;
+    margin: 12px 0;
+  }
+
+  /* === Tables === */
+  .table-group { margin-bottom: 32px; }
+
+  .table-label {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    padding: 6px 12px;
+    border-radius: var(--radius) var(--radius) 0 0;
+    margin-bottom: 0;
+    border: 1px solid var(--border);
+    border-bottom: none;
+  }
+
+  .label-model  { color: var(--accent-light);  background: rgba(37,99,235,0.1); }
+  .label-filter { color: var(--green);          background: rgba(34,197,94,0.08); }
+  .label-tile   { color: var(--purple);         background: rgba(168,85,247,0.08); }
+  .label-output { color: var(--amber);          background: rgba(245,158,11,0.08); }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    border: 1px solid var(--border);
+    border-radius: 0 0 var(--radius) var(--radius);
+    overflow: hidden;
+  }
+
+  th {
+    background: var(--bg-muted);
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 10px 14px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+  }
+
+  td {
+    padding: 10px 14px;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+    vertical-align: top;
+    font-size: 13px;
+  }
+
+  tr:last-child td { border-bottom: none; }
+
+  tr:hover td { background: rgba(255,255,255,0.02); }
+
+  td:first-child {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: #7dd3fc;
+    white-space: nowrap;
+    width: 180px;
+  }
+
+  td:nth-child(2) {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--amber);
+    white-space: nowrap;
+    width: 80px;
+  }
+
+  td:nth-child(3) { color: var(--text-muted); }
+
+  td:last-child {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-muted);
+    width: 100px;
+  }
+
+  /* === Output Files === */
+  .file-list { display: flex; flex-direction: column; gap: 8px; }
+
+  .file-item {
+    display: flex;
+    gap: 14px;
+    align-items: flex-start;
+    padding: 12px 16px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+  }
+
+  .file-icon {
+    font-size: 16px;
+    margin-top: 1px;
+    min-width: 20px;
+  }
+
+  .file-name {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: #7dd3fc;
+    display: block;
+    margin-bottom: 3px;
+  }
+
+  .file-desc { color: var(--text-muted); font-size: 13px; }
+
+  /* === FAQ Accordion === */
+  .faq { display: flex; flex-direction: column; gap: 8px; }
+
+  details {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    transition: border-color 0.2s;
+  }
+
+  details[open] { border-color: rgba(37,99,235,0.3); }
+
+  summary {
+    padding: 14px 18px;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 14px;
+    color: var(--text);
+    list-style: none;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    user-select: none;
+  }
+
+  summary::-webkit-details-marker { display: none; }
+
+  summary::after {
+    content: '+';
+    color: var(--accent-light);
+    font-size: 18px;
+    font-weight: 300;
+    transition: transform 0.2s;
+  }
+
+  details[open] summary::after { content: '−'; }
+
+  .faq-body {
+    padding: 0 18px 16px;
+    color: var(--text-muted);
+    font-size: 13px;
+    line-height: 1.7;
+    border-top: 1px solid var(--border);
+    padding-top: 14px;
+  }
+
+  .faq-body code { color: var(--amber); }
+
+  /* === Scrollbar === */
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<!-- ===== Sidebar ===== -->
+<nav>
+  <div class="nav-logo">
+    <h1>CellAppCP3</h1>
+    <span>v2.3.0 使用手册</span>
+  </div>
+
+  <div class="nav-section">入门</div>
+  <a href="#intro" class="active">简介</a>
+  <a href="#quickstart">快速开始</a>
+
+  <div class="nav-section">配置</div>
+  <a href="#model-params">模型参数</a>
+  <a href="#filter-params">过滤参数</a>
+  <a href="#tile-params">分块参数</a>
+  <a href="#output-params">输出参数</a>
+
+  <div class="nav-section">参考</div>
+  <a href="#outputs">输出文件</a>
+  <a href="#faq">常见问题</a>
+</nav>
+
+<!-- ===== Main ===== -->
+<main>
+
+  <!-- Hero -->
+  <div class="page-hero" id="intro">
+    <div class="badge">v2.3.0 · CLI</div>
+    <h1>CellAppCP3 使用手册</h1>
+    <p>CellAppCP3 是基于 Cellpose cyto3 模型的命令行界面工具，用于分割荧光细胞图像并按亮度排名，支持大图分块识别与 settings.txt 参数热配置。</p>
+  </div>
+
+  <!-- Quick Start -->
+  <section id="quickstart">
+    <h2>快速开始</h2>
+    <p>三步完成细胞图像识别，无需任何代码改动。</p>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <strong>放入图片</strong>
+          <span>将荧光细胞图像（.tif / .png / .jpg）复制到 <code>input/</code> 文件夹中。</span>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <strong>运行脚本</strong>
+          <span>在项目根目录打开终端，执行：</span>
+          <pre>python cells_find.py</pre>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <strong>查看结果</strong>
+          <span>结果自动生成到 <code>results/{图片名}/</code> 目录，包含标注图、CSV 数据和 Top 细胞裁剪图。</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Model Params -->
+  <section id="model-params">
+    <h2>settings.txt 参数说明</h2>
+    <p>修改 <code>settings.txt</code> 后保存，下次运行自动读取，无需改代码。未找到文件时使用内置默认值。</p>
+
+    <div class="table-group">
+      <div class="table-label label-model">🧠 模型参数</div>
+      <table>
+        <thead><tr><th>参数</th><th>默认值</th><th>说明</th><th>建议范围</th></tr></thead>
+        <tbody>
+          <tr><td>diameter</td><td>120</td><td>细胞直径（像素），根据实际细胞大小调整</td><td>50–200</td></tr>
+          <tr><td>flow_threshold</td><td>0.95</td><td>流场一致性阈值，越低越宽松，检测更多候选</td><td>0.1–1.0</td></tr>
+          <tr><td>cellprob_threshold</td><td>1.0</td><td>细胞概率阈值，越低检测越多，负值大幅放宽</td><td>-6.0–6.0</td></tr>
+          <tr><td>min_size</td><td>200</td><td>最小细胞面积（像素），排除过小的噪点区域</td><td>50–500</td></tr>
+          <tr><td>resample</td><td>0</td><td>是否对输出进行重采样，1=开启（更准但更慢）</td><td>0 或 1</td></tr>
+          <tr><td>niter</td><td>200</td><td>流场迭代次数，减少可显著提速</td><td>50–400</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="table-group" id="filter-params">
+      <div class="table-label label-filter">🔬 过滤参数</div>
+      <table>
+        <thead><tr><th>参数</th><th>默认值</th><th>说明</th><th>建议范围</th></tr></thead>
+        <tbody>
+          <tr><td>hull_comp</td><td>0.85</td><td>凸包完整度阈值，低于此值的不规则区域被过滤</td><td>0.6–0.95</td></tr>
+          <tr><td>circle_comp</td><td>0.65</td><td>圆形完整度阈值，过滤边缘残缺的细胞</td><td>0.4–0.85</td></tr>
+          <tr><td>dark_threshold</td><td>15</td><td>暗区过滤，均值亮度低于此值的区域跳过</td><td>5–30</td></tr>
+          <tr><td>area_ratio</td><td>0.15</td><td>面积过滤，小于中位数此比例的细胞被剔除</td><td>0.05–0.3</td></tr>
+          <tr><td>circularity</td><td>0.5</td><td>圆形度阈值，越低接受越不圆的形状</td><td>0.3–0.7</td></tr>
+          <tr><td>min_pixels</td><td>50</td><td>亮度计算所需最少像素数，低于此数跳过</td><td>20–100</td></tr>
+          <tr><td>brightness_top_pct</td><td>0.05</td><td>亮度取 top 百分比均值，0.05 表示前 5%</td><td>0.01–0.1</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="table-group" id="tile-params">
+      <div class="table-label label-tile">🗂 分块参数</div>
+      <table>
+        <thead><tr><th>参数</th><th>默认值</th><th>说明</th><th>建议范围</th></tr></thead>
+        <tbody>
+          <tr><td>large_mode</td><td>1</td><td>大图处理方式，1=自动分块识别，0=整图识别</td><td>0 或 1</td></tr>
+          <tr><td>tile_w</td><td>2048</td><td>分块宽度（像素）</td><td>1024–4096</td></tr>
+          <tr><td>tile_h</td><td>1080</td><td>分块高度（像素）</td><td>512–2160</td></tr>
+          <tr><td>tile_overlap</td><td>0.2</td><td>分块重叠比例，防止边界细胞被截断</td><td>0.1–0.3</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="table-group" id="output-params">
+      <div class="table-label label-output">🎨 输出参数</div>
+      <table>
+        <thead><tr><th>参数</th><th>默认值</th><th>说明</th><th>建议范围</th></tr></thead>
+        <tbody>
+          <tr><td>top_n</td><td>3</td><td>高亮显示并导出最亮的前 N 个细胞</td><td>1–20</td></tr>
+          <tr><td>crop_pad</td><td>2.0</td><td>Top 裁剪图范围（相对细胞半径的倍数）</td><td>1.5–3.0</td></tr>
+          <tr><td>contour_thickness</td><td>2</td><td>轮廓描边线宽（像素）</td><td>1–5</td></tr>
+          <tr><td>font_scale</td><td>0.7</td><td>标注文字大小倍数</td><td>0.3–1.5</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- Output Files -->
+  <section id="outputs">
+    <h2>输出文件说明</h2>
+    <p>每张图片处理完成后，在 <code>results/{图片名}/</code> 目录下生成以下文件：</p>
+    <div class="file-list">
+      <div class="file-item">
+        <div class="file-icon">🖼</div>
+        <div>
+          <span class="file-name">{图片名}_result.png</span>
+          <span class="file-desc">标注结果图。Top N 细胞绿色轮廓高亮，其余细胞黄色标注编号，80% 内圈压暗显示采样区域。</span>
+        </div>
+      </div>
+      <div class="file-item">
+        <div class="file-icon">🔍</div>
+        <div>
+          <span class="file-name">{图片名}_raw_detections.png</span>
+          <span class="file-desc">诊断图。显示过滤前的所有原始检测点（绿色圆点），用于调参参考。</span>
+        </div>
+      </div>
+      <div class="file-item">
+        <div class="file-icon">📊</div>
+        <div>
+          <span class="file-name">{图片名}_top{n}.csv</span>
+          <span class="file-desc">Top N 细胞数据，含排名、坐标 X/Y、亮度值。</span>
+        </div>
+      </div>
+      <div class="file-item">
+        <div class="file-icon">📋</div>
+        <div>
+          <span class="file-name">{图片名}_data.csv</span>
+          <span class="file-desc">全部有效细胞数据，含编号、直径（px）、坐标 X/Y、亮度值。</span>
+        </div>
+      </div>
+      <div class="file-item">
+        <div class="file-icon">✂️</div>
+        <div>
+          <span class="file-name">top1.png / top2.png / ...</span>
+          <span class="file-desc">Top N 细胞的放大裁剪图，左上角标注排名，方便直接查看最亮细胞形态。</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- FAQ -->
+  <section id="faq">
+    <h2>常见问题</h2>
+    <div class="faq">
+
+      <details>
+        <summary>细胞没被检测到，结果为空</summary>
+        <div class="faq-body">
+          降低 <code>cellprob_threshold</code>，默认值 1.0 较严格。可先尝试改为 <code>0.0</code>，若仍无结果改为 <code>-2.0</code> 甚至 <code>-4.0</code>。同时检查 <code>diameter</code> 是否与实际细胞大小匹配。
+        </div>
+      </details>
+
+      <details>
+        <summary>检测到太多噪点或不规则区域</summary>
+        <div class="faq-body">
+          提高 <code>hull_comp</code>（如改为 0.90）和 <code>circle_comp</code>（如改为 0.75），这两个阈值控制形状完整度，越高过滤越严格。也可提高 <code>circularity</code> 进一步限制形状圆度。
+        </div>
+      </details>
+
+      <details>
+        <summary>运行速度太慢</summary>
+        <div class="faq-body">
+          降低 <code>niter</code>（如改为 100 或 50）可显著提速，影响精度有限。确保 <code>resample=0</code>（关闭重采样）。大图时确认 <code>large_mode=1</code> 以启用分块处理，避免整图加载 OOM。
+        </div>
+      </details>
+
+      <details>
+        <summary>大图处理崩溃或内存不足</summary>
+        <div class="faq-body">
+          确认 <code>large_mode=1</code>。若仍崩溃，减小分块尺寸：将 <code>tile_w</code> 改为 1536，<code>tile_h</code> 改为 768。在 Apple Silicon 上 MPS 显存不足时会自动清理缓存，如持续崩溃可尝试降低分块尺寸。
+        </div>
+      </details>
+
+      <details>
+        <summary>裁剪图太小，看不清细胞</summary>
+        <div class="faq-body">
+          增大 <code>crop_pad</code>，默认值 2.0 表示裁剪范围为细胞半径的 2 倍。改为 3.0 或 4.0 可获得更大的上下文区域。
+        </div>
+      </details>
+
+      <details>
+        <summary>暗细胞被过滤掉了</summary>
+        <div class="faq-body">
+          降低 <code>dark_threshold</code>（如改为 5），该参数过滤平均亮度低于阈值的暗区，降低后更多暗区域会被保留参与识别。
+        </div>
+      </details>
+
+    </div>
+  </section>
+
+</main>
+
+<script>
+  // Highlight active nav link on scroll
+  const sections = document.querySelectorAll('section, .page-hero');
+  const links = document.querySelectorAll('nav a');
+  const obs = new IntersectionObserver(entries => {
+    entries.forEach(e => {
+      if (e.isIntersecting) {
+        links.forEach(l => l.classList.remove('active'));
+        const id = e.target.id;
+        const link = document.querySelector(`nav a[href="#${id}"]`);
+        if (link) link.classList.add('active');
+      }
+    });
+  }, { threshold: 0.3 });
+  sections.forEach(s => obs.observe(s));
+</script>
+
+</body>
+</html>
