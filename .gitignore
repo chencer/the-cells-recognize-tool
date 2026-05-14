@@ -1,0 +1,7 @@
+.DS_Store
+*.log
+input/
+results/
+__pycache__/
+*.pyc
+test_images/
