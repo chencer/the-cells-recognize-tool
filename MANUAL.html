@@ -84,12 +84,11 @@ body{background:var(--canvas);color:var(--ink);font-family:var(--font-sans);font
 .table-group-title.amber{color:#fbbf24}
 table{width:100%;border-collapse:collapse;font-size:14px}
 thead th{background:var(--canvas-soft);font-family:var(--font-mono);font-size:11px;letter-spacing:1.2px;text-transform:uppercase;color:var(--mute);padding:var(--sp-md) var(--sp-lg);text-align:left;border-bottom:1px solid var(--hairline)}
-tbody tr{border-bottom:1px solid var(--hairline);position:relative;transition:background var(--ease)}
-tbody tr::before{content:'';position:absolute;left:0;top:0;bottom:0;width:0;background:var(--accent);border-radius:0 2px 2px 0;transition:width var(--ease)}
+tbody tr{border-bottom:1px solid var(--hairline);transition:background var(--ease)}
 tbody tr:hover{background:var(--canvas-soft)}
-tbody tr:hover::before{width:3px}
 tbody td{padding:var(--sp-md) var(--sp-lg);color:var(--body);vertical-align:top}
-tbody td:first-child{font-family:var(--font-mono);font-size:12px;color:var(--ink);white-space:nowrap}
+tbody td:first-child{font-family:var(--font-mono);font-size:12px;color:var(--ink);white-space:nowrap;border-left:3px solid transparent;transition:border-color var(--ease)}
+tbody tr:hover td:first-child{border-left-color:var(--accent)}
 tbody td:nth-child(2){font-family:var(--font-mono);font-size:12px;color:var(--accent-light)}
 .range{font-size:12px;color:var(--mute)}
 
