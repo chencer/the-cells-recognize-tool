@@ -368,14 +368,6 @@ def process_image(model, image_path, results_dir, settings):
     if is_large and settings['large_mode'] == 1:
         print(f"  大图模式 ({w}x{h})", flush=True)
         tile_candidates = _tile_and_merge(model, raw_image, settings)
-        diag_img = raw_image.copy()
-        for cand in tile_candidates:
-            cy = int(np.mean(cand['gy']))
-            cx = int(np.mean(cand['gx']))
-            cv2.circle(diag_img, (cx, cy), 15, (0, 255, 0), -1)
-        diag_path = os.path.join(save_dir, f"{stem}_raw_detections.png")
-        cv2.imencode('.png', diag_img)[1].tofile(diag_path)
-        print(f"  诊断图已保存: {len(tile_candidates)} 个原始检测点", flush=True)
         cell_list      = _filter_and_rank_tile(tile_candidates, raw_image, settings)
         total_detected = len(tile_candidates)
     else:
@@ -391,16 +383,6 @@ def process_image(model, image_path, results_dir, settings):
             niter=settings['niter'],
             resample=bool(settings['resample']),
         )[0]
-        diag_img     = raw_image.copy()
-        cell_ids_raw = np.unique(masks)[1:]
-        for cid in cell_ids_raw:
-            ys_c, xs_c = np.where(masks == cid)
-            cy = int(np.mean(ys_c))
-            cx = int(np.mean(xs_c))
-            cv2.circle(diag_img, (cx, cy), 15, (0, 255, 0), -1)
-        diag_path = os.path.join(save_dir, f"{stem}_raw_detections.png")
-        cv2.imencode('.png', diag_img)[1].tofile(diag_path)
-        print(f"  诊断图已保存: {len(cell_ids_raw)} 个原始检测点", flush=True)
         cell_list      = _filter_and_rank_mask(masks, raw_image, settings)
         total_detected = len(np.unique(masks)) - 1
         is_large       = False
@@ -455,12 +437,6 @@ def process_image(model, image_path, results_dir, settings):
     print(f"  [Step6] 保存中...", flush=True)
     cv2.imencode('.png', res_img)[1].tofile(
         os.path.join(save_dir, f"{stem}_result.png"))
-
-    with open(os.path.join(save_dir, f"{stem}_top{top_n}.csv"), 'w', encoding='utf-8') as f:
-        f.write("排名,坐标X,坐标Y,亮度值\n")
-        for i, cell in enumerate(cell_list[:top_n], start=1):
-            cx, cy = cell["pos"]
-            f.write(f"{i},{cx},{cy},{int(cell['brightness'])}\n")
 
     crop_dir = os.path.join(save_dir, "crop")
     os.makedirs(crop_dir, exist_ok=True)
