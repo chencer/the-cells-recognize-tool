@@ -26,6 +26,7 @@ def load_settings():
         'top_n': 3, 'large_mode': 1,
         'tile_w': 2048, 'tile_h': 1080, 'tile_overlap': 0.2,
         'crop_pad': 2.0, 'contour_thickness': 2, 'font_scale': 0.7,
+        'sort_descending': 1, 'model_name': 'cyto3',
     }
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'settings.txt')
     if os.path.exists(path):
@@ -38,7 +39,9 @@ def load_settings():
                     key, val = line.split('=', 1)
                     key, val = key.strip(), val.strip()
                     if key in defaults:
-                        if isinstance(defaults[key], int):
+                        if key == 'model_name':
+                            defaults[key] = val
+                        elif isinstance(defaults[key], int):
                             defaults[key] = int(val)
                         elif isinstance(defaults[key], float):
                             defaults[key] = float(val)
@@ -49,7 +52,7 @@ def load_settings():
 
 
 # --- 模型加载 ---
-def load_model():
+def load_model(settings):
     print("正在加载模型...", flush=True)
     torch.serialization.add_safe_globals([cp_models.CellposeModel])
     import torch.serialization as _ts
@@ -66,13 +69,14 @@ def load_model():
         use_gpu = False
         print("  设备: CPU", flush=True)
 
-    model_path = get_resource_path("cyto3")
+    model_name = settings.get('model_name', 'cyto3')
+    model_path = get_resource_path(model_name)
     if os.path.exists(model_path):
         m = cp_models.CellposeModel(gpu=use_gpu, pretrained_model=model_path)
         print(f"✅ 成功加载本地模型: {model_path}", flush=True)
     else:
-        m = cp_models.Cellpose(gpu=use_gpu, model_type="cyto3")
-        print("✅ 使用系统默认路径加载 cyto3", flush=True)
+        m = cp_models.CellposeModel(gpu=use_gpu, model_type=model_name)
+        print(f"✅ 使用内置模型: {model_name}", flush=True)
     return m
 
 
@@ -260,7 +264,7 @@ def _filter_and_rank_tile(candidates, raw_image, settings):
                 "contours": contours_global,
             })
 
-    cell_list.sort(key=lambda x: x["brightness"], reverse=True)
+    cell_list.sort(key=lambda x: x["brightness"], reverse=bool(settings['sort_descending']))
     print(f"  [Step4] 有效细胞: {len(cell_list)}", flush=True)
     return cell_list
 
@@ -342,7 +346,7 @@ def _filter_and_rank_mask(masks, raw_image, settings):
                 "contours": c["contours"], "mask": c["mask"], "er": c["er"],
             })
 
-    cell_list.sort(key=lambda x: x["brightness"], reverse=True)
+    cell_list.sort(key=lambda x: x["brightness"], reverse=bool(settings['sort_descending']))
     print(f"  [Step4] 有效细胞: {len(cell_list)}", flush=True)
     return cell_list
 
@@ -497,7 +501,7 @@ def main():
     for img in images:
         print(f"  {os.path.basename(img)}", flush=True)
 
-    model   = load_model()
+    model   = load_model(settings)
     t_start = time.time()
 
     for img_path in images:

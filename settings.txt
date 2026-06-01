@@ -33,3 +33,10 @@ tile_overlap = 0.2
 crop_pad = 2.0
 contour_thickness = 2
 font_scale = 0.7
+
+# === 排序方向 (1=从亮到暗/荧光, 0=从暗到亮/亮场) ===
+sort_descending = 1
+
+# === Cellpose 模型名称 (cyto3 / brightfield / phase3D) ===
+# 本地有同名文件时优先加载本地，否则使用内置模型
+model_name = cyto3
