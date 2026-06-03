@@ -54,9 +54,6 @@ def load_settings():
 # --- 模型加载 ---
 def load_model(settings):
     print("正在加载模型...", flush=True)
-    torch.serialization.add_safe_globals([cp_models.CellposeModel])
-    import torch.serialization as _ts
-    torch.load = lambda *a, **kw: _ts.load(*a, **kw, weights_only=False)
     ssl._create_default_https_context = ssl._create_unverified_context
 
     if torch.cuda.is_available():
@@ -72,13 +69,8 @@ def load_model(settings):
     model_name = settings.get('model_name', 'cyto3')
     model_path = get_resource_path(model_name)
     if os.path.exists(model_path):
-        try:
-            m = cp_models.CellposeModel(gpu=use_gpu, pretrained_model=model_path)
-            print(f"✅ 成功加载本地模型: {model_path}", flush=True)
-        except Exception as e:
-            print(f"⚠️ CellposeModel 加载失败，尝试 Cellpose 方式: {e}", flush=True)
-            m = cp_models.Cellpose(gpu=use_gpu, model_type=model_name)
-            print(f"✅ 使用内置模型: {model_name}", flush=True)
+        m = cp_models.CellposeModel(gpu=use_gpu, pretrained_model=model_path)
+        print(f"✅ 成功加载本地模型: {model_path}", flush=True)
     else:
         m = cp_models.CellposeModel(gpu=use_gpu, model_type=model_name)
         print(f"✅ 使用内置模型: {model_name}", flush=True)
@@ -132,6 +124,8 @@ def _tile_and_merge(model, raw_image, settings):
                 resample=False,
                 tile=False,
             )[0]
+            if tile_masks.shape != (TH, TW):
+                tile_masks = cv2.resize(tile_masks, (TW, TH), interpolation=cv2.INTER_NEAREST)
 
             n_cells = len(np.unique(tile_masks)) - 1
             print(f"    → {n_cells} 个细胞", flush=True)
@@ -392,6 +386,8 @@ def process_image(model, image_path, results_dir, settings):
             niter=settings['niter'],
             resample=bool(settings['resample']),
         )[0]
+        if masks.shape != (h, w):
+            masks = cv2.resize(masks, (w, h), interpolation=cv2.INTER_NEAREST)
         cell_list      = _filter_and_rank_mask(masks, raw_image, settings)
         total_detected = len(np.unique(masks)) - 1
         is_large       = False
