@@ -72,8 +72,13 @@ def load_model(settings):
     model_name = settings.get('model_name', 'cyto3')
     model_path = get_resource_path(model_name)
     if os.path.exists(model_path):
-        m = cp_models.CellposeModel(gpu=use_gpu, pretrained_model=model_path)
-        print(f"✅ 成功加载本地模型: {model_path}", flush=True)
+        try:
+            m = cp_models.CellposeModel(gpu=use_gpu, pretrained_model=model_path)
+            print(f"✅ 成功加载本地模型: {model_path}", flush=True)
+        except Exception as e:
+            print(f"⚠️ CellposeModel 加载失败，尝试 Cellpose 方式: {e}", flush=True)
+            m = cp_models.Cellpose(gpu=use_gpu, model_type=model_name)
+            print(f"✅ 使用内置模型: {model_name}", flush=True)
     else:
         m = cp_models.CellposeModel(gpu=use_gpu, model_type=model_name)
         print(f"✅ 使用内置模型: {model_name}", flush=True)
