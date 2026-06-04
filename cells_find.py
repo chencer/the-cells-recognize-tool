@@ -116,7 +116,6 @@ def _tile_and_merge(model, raw_image, settings):
             tile_masks = model.eval(
                 tile,
                 diameter=settings['diameter'],
-                channels=[0, 0],
                 flow_threshold=settings['flow_threshold'],
                 cellprob_threshold=settings['cellprob_threshold'],
                 min_size=settings['min_size'],
@@ -378,7 +377,6 @@ def process_image(model, image_path, results_dir, settings):
         masks = model.eval(
             raw_image,
             diameter=settings['diameter'],
-            channels=[0, 0],
             flow_threshold=settings['flow_threshold'],
             cellprob_threshold=settings['cellprob_threshold'],
             min_size=settings['min_size'],
