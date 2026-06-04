@@ -122,7 +122,6 @@ def _tile_and_merge(model, raw_image, settings):
                 min_size=settings['min_size'],
                 niter=settings['niter'],
                 resample=False,
-                tile=False,
             )[0]
             if tile_masks.shape != (TH, TW):
                 tile_masks = cv2.resize(tile_masks, (TW, TH), interpolation=cv2.INTER_NEAREST)
