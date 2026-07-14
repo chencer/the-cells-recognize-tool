@@ -30,6 +30,9 @@ def load_settings():
         'bad_dark_threshold': 60, 'bad_dark_ratio': 0.10,
         'bad_hull_threshold': 0.90, 'enable_bad_detection': 1,
         'bad_inner_ratio': 0.6,
+        'hole_rel_ratio': 0.35, 'hole_min_area_ratio': 0.01,
+        'hole_extent_min': 0.35, 'hole_area_ratio': 0.03,
+        'defect_depth_ratio': 0.35,
     }
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'settings.txt')
     if os.path.exists(path):
@@ -185,6 +188,57 @@ def _tile_and_merge(model, raw_image, settings):
 
 
 # --- 大图过滤链（基于坐标，无全图 mask）---
+# --- 坏细胞检测：内部空洞 + 边缘破损（两路径共用）---
+def _detect_defects(local_gray, local_mask, er, settings):
+    """返回 (is_bad, hole_ratio, defect_ratio, reason)"""
+    m = local_mask.astype(np.uint8)
+    mb = m > 0
+    cell_area = int(mb.sum())
+    if cell_area == 0:
+        return False, 0.0, 0.0, ""
+    reason = []
+
+    # 线A：内部实心黑洞（相对亮度 + 连通域面积 + 实心度）
+    core_ref = float(np.median(local_gray[mb]))
+    dark_thr = core_ref * settings['hole_rel_ratio']
+    dark_bin = ((local_gray < dark_thr) & mb).astype(np.uint8)
+    hole_area = 0
+    if dark_bin.any():
+        n, _, stats, _ = cv2.connectedComponentsWithStats(dark_bin, 8)
+        min_a = cell_area * settings['hole_min_area_ratio']
+        for i in range(1, n):
+            a = int(stats[i, cv2.CC_STAT_AREA])
+            if a < min_a:
+                continue
+            bw = int(stats[i, cv2.CC_STAT_WIDTH])
+            bh = int(stats[i, cv2.CC_STAT_HEIGHT])
+            extent = a / (bw * bh) if bw * bh > 0 else 0.0
+            if extent >= settings['hole_extent_min']:
+                hole_area += a
+    hole_ratio = hole_area / cell_area
+    if hole_ratio > settings['hole_area_ratio']:
+        reason.append('HOLE')
+
+    # 线B：边缘缺口 / 形状破碎（凸包缺陷最大深度 / er）
+    defect_ratio = 0.0
+    cnts, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if cnts:
+        cnt = max(cnts, key=cv2.contourArea)
+        if len(cnt) >= 4:
+            hull = cv2.convexHull(cnt, returnPoints=False)
+            if hull is not None and len(hull) > 3:
+                try:
+                    d = cv2.convexityDefects(cnt, hull)
+                    if d is not None and er > 0:
+                        defect_ratio = float(d[:, 0, 3].max()) / 256.0 / er
+                except cv2.error:
+                    pass
+    if defect_ratio > settings['defect_depth_ratio']:
+        reason.append('BROKEN')
+
+    return (len(reason) > 0), hole_ratio, defect_ratio, '+'.join(reason)
+
+
 def _filter_and_rank_tile(candidates, raw_image, settings):
     gray         = cv2.cvtColor(raw_image, cv2.COLOR_BGR2GRAY)
     H_img, W_img = gray.shape
@@ -256,19 +310,12 @@ def _filter_and_rank_tile(candidates, raw_image, settings):
                 (cnt + np.array([[[lx0, ly0]]])).astype(np.int32)
                 for cnt in contours_local
             ]
-            is_bad    = False
-            dark_ratio = 0.0
             if settings['enable_bad_detection']:
-                inner_r      = er * settings['bad_inner_ratio']
-                dist         = np.sqrt((gx - cx_c) ** 2 + (gy - cy_c) ** 2)
-                inner_mask   = dist <= inner_r
-                inner_pixels = gray[gy[inner_mask], gx[inner_mask]]
-                if len(inner_pixels) > 0:
-                    dark_count = int(np.sum(inner_pixels < settings['bad_dark_threshold']))
-                    dark_ratio = dark_count / len(inner_pixels)
-                hull_bad   = c.get('hull_comp', 1.0) < settings['bad_hull_threshold']
-                if dark_ratio > settings['bad_dark_ratio'] or hull_bad:
-                    is_bad = True
+                local_gray = gray[ly0:ly0 + lh, lx0:lx0 + lw]
+                is_bad, hole_ratio, defect_ratio, bad_reason = _detect_defects(
+                    local_gray, local_m, er, settings)
+            else:
+                is_bad, hole_ratio, defect_ratio, bad_reason = False, 0.0, 0.0, ""
             cell_list.append({
                 "brightness": peak,
                 "pos": (cx_c, cy_c),
@@ -276,7 +323,9 @@ def _filter_and_rank_tile(candidates, raw_image, settings):
                 "er": er,
                 "contours": contours_global,
                 "is_bad": is_bad,
-                "dark_ratio": dark_ratio,
+                "dark_ratio": hole_ratio,
+                "defect_ratio": defect_ratio,
+                "reason": bad_reason,
             })
 
     if settings['enable_sort']:
@@ -358,24 +407,21 @@ def _filter_and_rank_mask(masks, raw_image, settings):
         if len(cell_pixels) > min_pixels:
             k    = max(1, int(len(cell_pixels) * top_pct))
             peak = float(np.mean(np.partition(cell_pixels, -k)[-k:]))
-            is_bad     = False
-            dark_ratio = 0.0
             if settings['enable_bad_detection']:
-                ys, xs       = np.where(c["mask"] > 0)
-                inner_r      = c["er"] * settings['bad_inner_ratio']
-                dist         = np.sqrt((xs - cx) ** 2 + (ys - cy) ** 2)
-                inner_mask   = dist <= inner_r
-                inner_pixels = gray[ys[inner_mask], xs[inner_mask]]
-                if len(inner_pixels) > 0:
-                    dark_count = int(np.sum(inner_pixels < settings['bad_dark_threshold']))
-                    dark_ratio = dark_count / len(inner_pixels)
-                hull_bad   = c.get('hull_comp', 1.0) < settings['bad_hull_threshold']
-                if dark_ratio > settings['bad_dark_ratio'] or hull_bad:
-                    is_bad = True
+                ys0, xs0 = np.where(c["mask"] > 0)
+                ly0, lx0 = int(ys0.min()), int(xs0.min())
+                ly1, lx1 = int(ys0.max()), int(xs0.max())
+                local_mask = c["mask"][ly0:ly1 + 1, lx0:lx1 + 1]
+                local_gray = gray[ly0:ly1 + 1, lx0:lx1 + 1]
+                is_bad, hole_ratio, defect_ratio, bad_reason = _detect_defects(
+                    local_gray, local_mask, c["er"], settings)
+            else:
+                is_bad, hole_ratio, defect_ratio, bad_reason = False, 0.0, 0.0, ""
             cell_list.append({
                 "brightness": peak, "pos": (cx, cy),
                 "contours": c["contours"], "mask": c["mask"], "er": c["er"],
-                "is_bad": is_bad, "dark_ratio": dark_ratio,
+                "is_bad": is_bad, "dark_ratio": hole_ratio,
+                "defect_ratio": defect_ratio, "reason": bad_reason,
             })
 
     if settings['enable_sort']:
@@ -460,9 +506,10 @@ def process_image(model, image_path, results_dir, settings):
 
         # 红色：坏细胞
         for cell in bad_cells:
-            cx, cy = cell["pos"]
+            cx, cy    = cell["pos"]
+            bad_label = cell.get('reason') or 'BAD'
             cv2.drawContours(res_img, cell["contours"], -1, (0, 0, 255), thickness)
-            cv2.putText(res_img, "BAD", (cx + 6, cy - 6),
+            cv2.putText(res_img, bad_label, (cx + 6, cy - 6),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
 
         # 黄色：其余正常细胞
@@ -506,13 +553,15 @@ def process_image(model, image_path, results_dir, settings):
         print(f"  Top{rank} 裁剪图已保存", flush=True)
 
     with open(os.path.join(save_dir, f"{stem}_data.csv"), 'w', encoding='utf-8') as f:
-        f.write("编号,状态,直径(px),坐标X,坐标Y,亮度值,暗区比例\n")
+        f.write("编号,状态,标记原因,直径(px),坐标X,坐标Y,亮度值,空洞比例,缺口比例\n")
         for i, cell in enumerate(cell_list, start=1):
-            cx, cy     = cell["pos"]
-            diameter   = round(cell["er"] * 2, 1)
-            status     = '!!!BAD!!!' if cell.get('is_bad', False) else 'OK'
-            dark_ratio = round(cell.get('dark_ratio', 0.0), 4)
-            f.write(f"{i},{status},{diameter},{cx},{cy},{int(cell['brightness'])},{dark_ratio}\n")
+            cx, cy       = cell["pos"]
+            diameter     = round(cell["er"] * 2, 1)
+            status       = '!!!BAD!!!' if cell.get('is_bad', False) else 'OK'
+            reason       = cell.get('reason', '') or '-'
+            hole_ratio   = round(cell.get('dark_ratio', 0.0), 4)
+            defect_ratio = round(cell.get('defect_ratio', 0.0), 4)
+            f.write(f"{i},{status},{reason},{diameter},{cx},{cy},{int(cell['brightness'])},{hole_ratio},{defect_ratio}\n")
 
     top1    = cell_list[0] if cell_list else None
     summary = f"  检测: {total_detected}  有效: {len(cell_list)}"
