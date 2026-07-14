@@ -37,6 +37,18 @@ font_scale = 0.7
 # === 排序方向 (1=从亮到暗/荧光, 0=从暗到亮/亮场) ===
 sort_descending = 1
 
+# === 排序开关 (1=开启, 0=不排序) ===
+enable_sort = 1
+
+# === 坏细胞检测 ===
+# 内部暗区检测：内部像素低于此值的比例超过 bad_dark_ratio 则判为坏细胞
+bad_dark_threshold = 60
+bad_dark_ratio = 0.10
+# 形状破损检测：凸包完整度低于此值判为坏细胞
+bad_hull_threshold = 0.90
+# 坏细胞检测总开关 (1=开启, 0=关闭)
+enable_bad_detection = 1
+
 # === Cellpose 模型名称 (cyto3 / brightfield / phase3D) ===
 # 本地有同名文件时优先加载本地，否则使用内置模型
-model_name = cyto3
+model_name = cpsam

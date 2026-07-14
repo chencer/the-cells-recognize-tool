@@ -26,7 +26,9 @@ def load_settings():
         'top_n': 3, 'large_mode': 1,
         'tile_w': 2048, 'tile_h': 1080, 'tile_overlap': 0.2,
         'crop_pad': 2.0, 'contour_thickness': 2, 'font_scale': 0.7,
-        'sort_descending': 1, 'model_name': 'cyto3',
+        'sort_descending': 1, 'enable_sort': 1, 'model_name': 'cyto3',
+        'bad_dark_threshold': 60, 'bad_dark_ratio': 0.10,
+        'bad_hull_threshold': 0.90, 'enable_bad_detection': 1,
     }
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'settings.txt')
     if os.path.exists(path):
@@ -207,7 +209,7 @@ def _filter_and_rank_tile(candidates, raw_image, settings):
         circle_comp = area / circle_area if circle_area > 0 else 0.0
         if hull_comp < hull_comp_thr or circle_comp < circle_comp_thr:
             continue
-        filtered.append({**c, 'er': er})
+        filtered.append({**c, 'er': er, 'hull_comp': hull_comp})
     print(f"  [Step1] 完整度过滤: {len(filtered)} / {len(candidates)}", flush=True)
 
     # Step2: 面积过滤
@@ -253,15 +255,27 @@ def _filter_and_rank_tile(candidates, raw_image, settings):
                 (cnt + np.array([[[lx0, ly0]]])).astype(np.int32)
                 for cnt in contours_local
             ]
+            is_bad    = False
+            dark_ratio = 0.0
+            if settings['enable_bad_detection']:
+                all_pixels = gray[gy, gx]
+                dark_count = int(np.sum(all_pixels < settings['bad_dark_threshold']))
+                dark_ratio = dark_count / len(all_pixels) if len(all_pixels) > 0 else 0.0
+                hull_bad   = c.get('hull_comp', 1.0) < settings['bad_hull_threshold']
+                if dark_ratio > settings['bad_dark_ratio'] or hull_bad:
+                    is_bad = True
             cell_list.append({
                 "brightness": peak,
                 "pos": (cx_c, cy_c),
                 "gy": gy, "gx": gx,
                 "er": er,
                 "contours": contours_global,
+                "is_bad": is_bad,
+                "dark_ratio": dark_ratio,
             })
 
-    cell_list.sort(key=lambda x: x["brightness"], reverse=bool(settings['sort_descending']))
+    if settings['enable_sort']:
+        cell_list.sort(key=lambda x: x["brightness"], reverse=bool(settings['sort_descending']))
     print(f"  [Step4] 有效细胞: {len(cell_list)}", flush=True)
     return cell_list
 
@@ -300,6 +314,7 @@ def _filter_and_rank_mask(masks, raw_image, settings):
         candidates.append({
             "mask": mask, "mask_area": mask_area,
             "contours": contours, "perimeter": perimeter, "er": er,
+            "hull_comp": hull_comp,
         })
     print(f"  [Step1] 完整度过滤: {len(candidates)} / {total_detected}", flush=True)
 
@@ -338,12 +353,24 @@ def _filter_and_rank_mask(masks, raw_image, settings):
         if len(cell_pixels) > min_pixels:
             k    = max(1, int(len(cell_pixels) * top_pct))
             peak = float(np.mean(np.partition(cell_pixels, -k)[-k:]))
+            is_bad     = False
+            dark_ratio = 0.0
+            if settings['enable_bad_detection']:
+                ys, xs     = np.where(c["mask"] > 0)
+                all_pixels = gray[ys, xs]
+                dark_count = int(np.sum(all_pixels < settings['bad_dark_threshold']))
+                dark_ratio = dark_count / len(all_pixels) if len(all_pixels) > 0 else 0.0
+                hull_bad   = c.get('hull_comp', 1.0) < settings['bad_hull_threshold']
+                if dark_ratio > settings['bad_dark_ratio'] or hull_bad:
+                    is_bad = True
             cell_list.append({
                 "brightness": peak, "pos": (cx, cy),
                 "contours": c["contours"], "mask": c["mask"], "er": c["er"],
+                "is_bad": is_bad, "dark_ratio": dark_ratio,
             })
 
-    cell_list.sort(key=lambda x: x["brightness"], reverse=bool(settings['sort_descending']))
+    if settings['enable_sort']:
+        cell_list.sort(key=lambda x: x["brightness"], reverse=bool(settings['sort_descending']))
     print(f"  [Step4] 有效细胞: {len(cell_list)}", flush=True)
     return cell_list
 
@@ -395,15 +422,12 @@ def process_image(model, image_path, results_dir, settings):
     # ── 标注结果图 ────────────────────────────────────────────────────────────
     res_img = raw_image.copy()
     if cell_list:
-        top_cells = cell_list[:top_n]
-        others    = cell_list[top_n:]
+        bad_cells    = [c for c in cell_list if c.get('is_bad', False)]
+        normal_cells = [c for c in cell_list if not c.get('is_bad', False)]
+        top_cells    = normal_cells[:top_n]
+        other_normal = normal_cells[top_n:]
 
-        for idx, cell in enumerate(others, start=top_n + 1):
-            cx, cy = cell["pos"]
-            cv2.drawContours(res_img, cell["contours"], -1, (0, 255, 255), thickness)
-            cv2.putText(res_img, str(idx), (cx + 6, cy - 6),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (220, 220, 220), 1)
-
+        # 暗区压暗遮罩
         if is_large:
             for cell in cell_list:
                 cx, cy = cell["pos"]
@@ -425,6 +449,21 @@ def process_image(model, image_path, results_dir, settings):
                 ring = (outer_m > 0) & (inner_m == 0) & (cell["mask"] > 0)
                 res_img[ring] = (res_img[ring] * 0.6).astype(np.uint8)
 
+        # 红色：坏细胞
+        for cell in bad_cells:
+            cx, cy = cell["pos"]
+            cv2.drawContours(res_img, cell["contours"], -1, (0, 0, 255), thickness)
+            cv2.putText(res_img, "BAD", (cx + 6, cy - 6),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+
+        # 黄色：其余正常细胞
+        for idx, cell in enumerate(other_normal, start=top_n + 1):
+            cx, cy = cell["pos"]
+            cv2.drawContours(res_img, cell["contours"], -1, (0, 255, 255), thickness)
+            cv2.putText(res_img, str(idx), (cx + 6, cy - 6),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (220, 220, 220), 1)
+
+        # 绿色：top_n 正常细胞
         for rank, cell in enumerate(top_cells, start=1):
             cx, cy = cell["pos"]
             cv2.drawContours(res_img, cell["contours"], -1, (0, 255, 0), thickness)
@@ -442,7 +481,8 @@ def process_image(model, image_path, results_dir, settings):
 
     crop_dir = os.path.join(save_dir, "crop")
     os.makedirs(crop_dir, exist_ok=True)
-    for rank, cell in enumerate(cell_list[:top_n], start=1):
+    _top_for_crop = [c for c in cell_list if not c.get('is_bad', False)][:top_n]
+    for rank, cell in enumerate(_top_for_crop, start=1):
         cx, cy = cell["pos"]
         pad    = int(cell["er"] * settings['crop_pad'])
         y1     = max(0, cy - pad)
@@ -457,11 +497,13 @@ def process_image(model, image_path, results_dir, settings):
         print(f"  Top{rank} 裁剪图已保存", flush=True)
 
     with open(os.path.join(save_dir, f"{stem}_data.csv"), 'w', encoding='utf-8') as f:
-        f.write("编号,直径(px),坐标X,坐标Y,亮度值\n")
+        f.write("编号,状态,直径(px),坐标X,坐标Y,亮度值,暗区比例\n")
         for i, cell in enumerate(cell_list, start=1):
-            cx, cy   = cell["pos"]
-            diameter = round(cell["er"] * 2, 1)
-            f.write(f"{i},{diameter},{cx},{cy},{int(cell['brightness'])}\n")
+            cx, cy     = cell["pos"]
+            diameter   = round(cell["er"] * 2, 1)
+            status     = '!!!BAD!!!' if cell.get('is_bad', False) else 'OK'
+            dark_ratio = round(cell.get('dark_ratio', 0.0), 4)
+            f.write(f"{i},{status},{diameter},{cx},{cy},{int(cell['brightness'])},{dark_ratio}\n")
 
     top1    = cell_list[0] if cell_list else None
     summary = f"  检测: {total_detected}  有效: {len(cell_list)}"
