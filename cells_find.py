@@ -29,6 +29,7 @@ def load_settings():
         'sort_descending': 1, 'enable_sort': 1, 'model_name': 'cyto3',
         'bad_dark_threshold': 60, 'bad_dark_ratio': 0.10,
         'bad_hull_threshold': 0.90, 'enable_bad_detection': 1,
+        'bad_inner_ratio': 0.6,
     }
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'settings.txt')
     if os.path.exists(path):
@@ -258,9 +259,13 @@ def _filter_and_rank_tile(candidates, raw_image, settings):
             is_bad    = False
             dark_ratio = 0.0
             if settings['enable_bad_detection']:
-                all_pixels = gray[gy, gx]
-                dark_count = int(np.sum(all_pixels < settings['bad_dark_threshold']))
-                dark_ratio = dark_count / len(all_pixels) if len(all_pixels) > 0 else 0.0
+                inner_r      = er * settings['bad_inner_ratio']
+                dist         = np.sqrt((gx - cx_c) ** 2 + (gy - cy_c) ** 2)
+                inner_mask   = dist <= inner_r
+                inner_pixels = gray[gy[inner_mask], gx[inner_mask]]
+                if len(inner_pixels) > 0:
+                    dark_count = int(np.sum(inner_pixels < settings['bad_dark_threshold']))
+                    dark_ratio = dark_count / len(inner_pixels)
                 hull_bad   = c.get('hull_comp', 1.0) < settings['bad_hull_threshold']
                 if dark_ratio > settings['bad_dark_ratio'] or hull_bad:
                     is_bad = True
@@ -356,10 +361,14 @@ def _filter_and_rank_mask(masks, raw_image, settings):
             is_bad     = False
             dark_ratio = 0.0
             if settings['enable_bad_detection']:
-                ys, xs     = np.where(c["mask"] > 0)
-                all_pixels = gray[ys, xs]
-                dark_count = int(np.sum(all_pixels < settings['bad_dark_threshold']))
-                dark_ratio = dark_count / len(all_pixels) if len(all_pixels) > 0 else 0.0
+                ys, xs       = np.where(c["mask"] > 0)
+                inner_r      = c["er"] * settings['bad_inner_ratio']
+                dist         = np.sqrt((xs - cx) ** 2 + (ys - cy) ** 2)
+                inner_mask   = dist <= inner_r
+                inner_pixels = gray[ys[inner_mask], xs[inner_mask]]
+                if len(inner_pixels) > 0:
+                    dark_count = int(np.sum(inner_pixels < settings['bad_dark_threshold']))
+                    dark_ratio = dark_count / len(inner_pixels)
                 hull_bad   = c.get('hull_comp', 1.0) < settings['bad_hull_threshold']
                 if dark_ratio > settings['bad_dark_ratio'] or hull_bad:
                     is_bad = True
