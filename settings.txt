@@ -45,8 +45,14 @@ bad_dark_ratio = 0.10
 bad_hull_threshold = 0.90
 # 坏细胞检测总开关 (1=开启, 0=关闭)
 enable_bad_detection = 1
-# 暗区判定只看内圈的比例（排除外圈黑边，0.6 = 内 60%）
-bad_inner_ratio = 0.6
+# 暗区判定只看内圈的比例（排除外圈黑边，0.85 = 内 85%，覆盖边缘暗点）
+bad_inner_ratio = 0.85
+
+# === 边缘破损检测 ===
+# 凸包缺陷深度超过细胞半径此比例判为破损
+bad_defect_depth_ratio = 0.15
+# 凸包面积与细胞面积差超过此比例判为破损
+bad_defect_area_ratio = 0.05
 
 # === Cellpose 模型名称 (cyto3 / brightfield / phase3D) ===
 # 本地有同名文件时优先加载本地，否则使用内置模型

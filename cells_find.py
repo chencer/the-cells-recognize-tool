@@ -29,10 +29,11 @@ def load_settings():
         'sort_descending': 1, 'enable_sort': 1, 'model_name': 'cyto3',
         'bad_dark_threshold': 60, 'bad_dark_ratio': 0.10,
         'bad_hull_threshold': 0.90, 'enable_bad_detection': 1,
-        'bad_inner_ratio': 0.6,
+        'bad_inner_ratio': 0.85,
         'hole_rel_ratio': 0.35, 'hole_min_area_ratio': 0.01,
         'hole_extent_min': 0.35, 'hole_area_ratio': 0.03,
         'defect_depth_ratio': 0.35,
+        'bad_defect_depth_ratio': 0.15, 'bad_defect_area_ratio': 0.05,
     }
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'settings.txt')
     if os.path.exists(path):
@@ -114,21 +115,33 @@ def _detect_defects(local_gray, local_mask, er, settings):
     if hole_ratio > settings['hole_area_ratio']:
         reason.append('HOLE')
 
-    # 线B：边缘缺口 / 形状破碎（凸包缺陷最大深度 / er）
+    # 线B：边缘缺口 / 形状破碎（凸包缺陷深度 + 凸包面积差）
     defect_ratio = 0.0
+    is_broken = False
     cnts, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if cnts:
         cnt = max(cnts, key=cv2.contourArea)
-        if len(cnt) >= 4:
-            hull = cv2.convexHull(cnt, returnPoints=False)
-            if hull is not None and len(hull) > 3:
-                try:
-                    d = cv2.convexityDefects(cnt, hull)
-                    if d is not None and er > 0:
-                        defect_ratio = float(d[:, 0, 3].max()) / 256.0 / er
-                except cv2.error:
-                    pass
-    if defect_ratio > settings['defect_depth_ratio']:
+        try:
+            hull_idx = cv2.convexHull(cnt, returnPoints=False)
+            if hull_idx is not None and len(hull_idx) > 3 and len(cnt) > 3:
+                defects = cv2.convexityDefects(cnt, hull_idx)
+                if defects is not None:
+                    max_depth = 0
+                    for i in range(defects.shape[0]):
+                        s, e, f, d = defects[i, 0]
+                        max_depth = max(max_depth, d / 256.0)
+                    defect_ratio = max_depth / er if er > 0 else 0.0
+                    if defect_ratio > settings['bad_defect_depth_ratio']:
+                        is_broken = True
+        except Exception:
+            pass
+        hull_pts = cv2.convexHull(cnt)
+        hull_area = cv2.contourArea(hull_pts)
+        if hull_area > 0:
+            area_diff_ratio = (hull_area - cell_area) / hull_area
+            if area_diff_ratio > settings['bad_defect_area_ratio']:
+                is_broken = True
+    if is_broken:
         reason.append('BROKEN')
 
     return (len(reason) > 0), hole_ratio, defect_ratio, '+'.join(reason)
