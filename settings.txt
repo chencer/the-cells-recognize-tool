@@ -21,13 +21,11 @@ brightness_top_pct = 0.05
 # === Top 排行 ===
 top_n = 3
 
-# === 大图模式 (1=分块, 0=整图) ===
-large_mode = 1
-
-# === 分块尺寸 ===
-tile_w = 2048
-tile_h = 1080
-tile_overlap = 0.2
+# === 大图缩放 ===
+# 超过此像素面积的图片自动等比例缩放
+resize_area_threshold = 9000000
+# 缩放后最长边像素
+resize_max_side = 4096
 
 # === 输出样式 ===
 crop_pad = 2.0

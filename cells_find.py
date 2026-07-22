@@ -23,8 +23,8 @@ def load_settings():
         'hull_comp': 0.85, 'circle_comp': 0.65, 'dark_threshold': 15,
         'area_ratio': 0.15, 'circularity': 0.5, 'min_pixels': 50,
         'brightness_top_pct': 0.05,
-        'top_n': 3, 'large_mode': 1,
-        'tile_w': 2048, 'tile_h': 1080, 'tile_overlap': 0.2,
+        'top_n': 3,
+        'resize_area_threshold': 9000000, 'resize_max_side': 4096,
         'crop_pad': 2.0, 'contour_thickness': 2, 'font_scale': 0.7,
         'sort_descending': 1, 'enable_sort': 1, 'model_name': 'cyto3',
         'bad_dark_threshold': 60, 'bad_dark_ratio': 0.10,
@@ -83,111 +83,6 @@ def load_model(settings):
     return m
 
 
-# --- 大图分块识别，返回候选细胞列表 ---
-def _tile_and_merge(model, raw_image, settings):
-    H, W   = raw_image.shape[:2]
-    TW     = settings['tile_w']
-    TH     = settings['tile_h']
-    OX     = int(TW * settings['tile_overlap'])
-    OY     = int(TH * settings['tile_overlap'])
-    SX     = TW - OX
-    SY     = TH - OY
-
-    def origins(total, tile, step):
-        pts = list(range(0, total - tile, step))
-        pts.append(max(0, total - tile))
-        return sorted(set(pts))
-
-    xs    = origins(W, TW, SX)
-    ys    = origins(H, TH, SY)
-    total = len(xs) * len(ys)
-    print(f"  裁切为 {len(xs)}x{len(ys)} = {total} 块 ({TW}x{TH}, 重叠{int(settings['tile_overlap']*100)}%)", flush=True)
-
-    candidates = []
-    count = 0
-    for y0 in ys:
-        for x0 in xs:
-            count += 1
-            print(f"  [{count}/{total}] 处理中...", flush=True)
-            x1   = min(x0 + TW, W)
-            y1   = min(y0 + TH, H)
-            tile = raw_image[y0:y1, x0:x1]
-
-            th, tw = tile.shape[:2]
-            if th < TH or tw < TW:
-                pad = np.zeros((TH, TW, raw_image.shape[2]), dtype=raw_image.dtype)
-                pad[:th, :tw] = tile
-                tile = pad
-
-            tile_masks = model.eval(
-                tile,
-                diameter=settings['diameter'],
-                flow_threshold=settings['flow_threshold'],
-                cellprob_threshold=settings['cellprob_threshold'],
-                min_size=settings['min_size'],
-                niter=settings['niter'],
-                resample=False,
-            )[0]
-            if tile_masks.shape != (TH, TW):
-                tile_masks = cv2.resize(tile_masks, (TW, TH), interpolation=cv2.INTER_NEAREST)
-
-            n_cells = len(np.unique(tile_masks)) - 1
-            print(f"    → {n_cells} 个细胞", flush=True)
-
-            for cid in np.unique(tile_masks)[1:]:
-                ly, lx = np.where(tile_masks == cid)
-                valid  = (ly < (y1 - y0)) & (lx < (x1 - x0))
-                gy     = (ly[valid] + y0).astype(np.int32)
-                gx     = (lx[valid] + x0).astype(np.int32)
-                if len(gy) < 10:
-                    continue
-                bbox = (int(gy.min()), int(gx.min()), int(gy.max()), int(gx.max()))
-                candidates.append({'gy': gy, 'gx': gx, 'area': len(gy), 'bbox': bbox})
-
-    # IoU 去重
-    print(f"  合并去重中... ({len(candidates)} 个候选细胞)", flush=True)
-    keep = [True] * len(candidates)
-
-    for i in range(len(candidates)):
-        if not keep[i]:
-            continue
-        bi = candidates[i]['bbox']
-        for j in range(i + 1, len(candidates)):
-            if not keep[j]:
-                continue
-            bj = candidates[j]['bbox']
-            if bi[2] < bj[0] or bj[2] < bi[0] or bi[3] < bj[1] or bj[3] < bi[1]:
-                continue
-            iy1 = max(bi[0], bj[0]); ix1 = max(bi[1], bj[1])
-            iy2 = min(bi[2], bj[2]); ix2 = min(bi[3], bj[3])
-            if iy2 <= iy1 or ix2 <= ix1:
-                continue
-            rh, rw = iy2 - iy1, ix2 - ix1
-            mi = np.zeros((rh, rw), dtype=bool)
-            mj = np.zeros((rh, rw), dtype=bool)
-            ci = candidates[i]
-            vi = (ci['gy'] >= iy1) & (ci['gy'] < iy2) & (ci['gx'] >= ix1) & (ci['gx'] < ix2)
-            mi[ci['gy'][vi] - iy1, ci['gx'][vi] - ix1] = True
-            cj = candidates[j]
-            vj = (cj['gy'] >= iy1) & (cj['gy'] < iy2) & (cj['gx'] >= ix1) & (cj['gx'] < ix2)
-            mj[cj['gy'][vj] - iy1, cj['gx'][vj] - ix1] = True
-            inter = int(np.sum(mi & mj))
-            if inter == 0:
-                continue
-            iou = inter / (ci['area'] + cj['area'] - inter)
-            if iou > 0.3:
-                if ci['area'] >= cj['area']:
-                    keep[j] = False
-                else:
-                    keep[i] = False
-                    break
-
-    surviving = [c for c, k in zip(candidates, keep) if k]
-    print(f"  合并完成，总细胞数: {len(surviving)}", flush=True)
-    return surviving
-
-
-# --- 大图过滤链（基于坐标，无全图 mask）---
 # --- 坏细胞检测：内部空洞 + 边缘破损（两路径共用）---
 def _detect_defects(local_gray, local_mask, er, settings):
     """返回 (is_bad, hole_ratio, defect_ratio, reason)"""
@@ -239,102 +134,7 @@ def _detect_defects(local_gray, local_mask, er, settings):
     return (len(reason) > 0), hole_ratio, defect_ratio, '+'.join(reason)
 
 
-def _filter_and_rank_tile(candidates, raw_image, settings):
-    gray         = cv2.cvtColor(raw_image, cv2.COLOR_BGR2GRAY)
-    H_img, W_img = gray.shape
-
-    hull_comp_thr  = settings['hull_comp']
-    circle_comp_thr = settings['circle_comp']
-    area_ratio     = settings['area_ratio']
-    circ_thr       = settings['circularity']
-    min_pixels     = settings['min_pixels']
-    top_pct        = settings['brightness_top_pct']
-
-    # Step1: 完整度过滤（bbox 近似）
-    filtered = []
-    for c in candidates:
-        area = c['area']
-        bbox = c['bbox']
-        bh   = bbox[2] - bbox[0] + 1
-        bw   = bbox[3] - bbox[1] + 1
-        er   = max(bh, bw) / 2
-        hull_approx = bh * bw * 0.785
-        hull_comp   = area / hull_approx if hull_approx > 0 else 0.0
-        circle_area = math.pi * er * er
-        circle_comp = area / circle_area if circle_area > 0 else 0.0
-        if hull_comp < hull_comp_thr or circle_comp < circle_comp_thr:
-            continue
-        filtered.append({**c, 'er': er, 'hull_comp': hull_comp})
-    print(f"  [Step1] 完整度过滤: {len(filtered)} / {len(candidates)}", flush=True)
-
-    # Step2: 面积过滤
-    if filtered:
-        median_area = float(np.median([c['area'] for c in filtered]))
-        filtered    = [c for c in filtered if c['area'] >= median_area * area_ratio]
-    print(f"  [Step2] 面积过滤: {len(filtered)}", flush=True)
-
-    # Step3: 圆形度过滤
-    result = []
-    for c in filtered:
-        er        = c['er']
-        perimeter = 2 * math.pi * er
-        circ      = 4 * math.pi * c['area'] / (perimeter ** 2) if perimeter > 0 else 0.0
-        if circ >= circ_thr:
-            result.append(c)
-    print(f"  [Step3] 圆形度过滤: {len(result)}", flush=True)
-
-    # 亮度计算
-    cell_list = []
-    for c in result:
-        gy, gx  = c['gy'], c['gx']
-        cy_c    = int(np.mean(gy))
-        cx_c    = int(np.mean(gx))
-        er      = c['er']
-        ir      = max(1, int(er * 0.8))
-        ry1     = max(0, cy_c - ir);  ry2 = min(H_img, cy_c + ir + 1)
-        rx1     = max(0, cx_c - ir);  rx2 = min(W_img, cx_c + ir + 1)
-        cell_pixels = gray[ry1:ry2, rx1:rx2].flatten()
-        if len(cell_pixels) > min_pixels:
-            k    = max(1, int(len(cell_pixels) * top_pct))
-            peak = float(np.mean(np.partition(cell_pixels, -k)[-k:]))
-
-            bbox     = c['bbox']
-            ly0, lx0 = bbox[0], bbox[1]
-            lh       = bbox[2] - ly0 + 1
-            lw       = bbox[3] - lx0 + 1
-            local_m  = np.zeros((lh, lw), dtype=np.uint8)
-            local_m[gy - ly0, gx - lx0] = 1
-            contours_local, _ = cv2.findContours(
-                local_m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            contours_global = [
-                (cnt + np.array([[[lx0, ly0]]])).astype(np.int32)
-                for cnt in contours_local
-            ]
-            if settings['enable_bad_detection']:
-                local_gray = gray[ly0:ly0 + lh, lx0:lx0 + lw]
-                is_bad, hole_ratio, defect_ratio, bad_reason = _detect_defects(
-                    local_gray, local_m, er, settings)
-            else:
-                is_bad, hole_ratio, defect_ratio, bad_reason = False, 0.0, 0.0, ""
-            cell_list.append({
-                "brightness": peak,
-                "pos": (cx_c, cy_c),
-                "gy": gy, "gx": gx,
-                "er": er,
-                "contours": contours_global,
-                "is_bad": is_bad,
-                "dark_ratio": hole_ratio,
-                "defect_ratio": defect_ratio,
-                "reason": bad_reason,
-            })
-
-    if settings['enable_sort']:
-        cell_list.sort(key=lambda x: x["brightness"], reverse=bool(settings['sort_descending']))
-    print(f"  [Step4] 有效细胞: {len(cell_list)}", flush=True)
-    return cell_list
-
-
-# --- 小图过滤链（基于 cellpose mask）---
+# --- 过滤链（基于 cellpose mask）---
 def _filter_and_rank_mask(masks, raw_image, settings):
     gray           = cv2.cvtColor(raw_image, cv2.COLOR_BGR2GRAY)
     H_img, W_img   = gray.shape
@@ -440,42 +240,47 @@ def process_image(model, image_path, results_dir, settings):
         print("  ❌ 无法读取图片，跳过", flush=True)
         return
 
-    h, w     = raw_image.shape[:2]
-    H_img, W_img = h, w
-    is_large = w * h > 3000 * 3000
-    top_n    = settings['top_n']
+    orig_h, orig_w = raw_image.shape[:2]
+    scale = 1.0
+
+    if orig_w * orig_h > settings['resize_area_threshold']:
+        max_side = settings['resize_max_side']
+        scale = min(1.0, max_side / max(orig_w, orig_h))
+        if scale < 1.0:
+            new_w = int(orig_w * scale)
+            new_h = int(orig_h * scale)
+            work_image = cv2.resize(raw_image, (new_w, new_h), interpolation=cv2.INTER_AREA)
+            print(f"  大图缩放: {orig_w}x{orig_h} → {new_w}x{new_h} (scale={scale:.4f})", flush=True)
+        else:
+            work_image = raw_image
+    else:
+        work_image = raw_image
+
+    H_img, W_img = work_image.shape[:2]
+    top_n = settings['top_n']
 
     save_dir = os.path.join(results_dir, stem)
     os.makedirs(save_dir, exist_ok=True)
 
-    if is_large and settings['large_mode'] == 1:
-        print(f"  大图模式 ({w}x{h})", flush=True)
-        tile_candidates = _tile_and_merge(model, raw_image, settings)
-        cell_list      = _filter_and_rank_tile(tile_candidates, raw_image, settings)
-        total_detected = len(tile_candidates)
-    else:
-        if is_large:
-            print(f"  大图整图模式 ({w}x{h})", flush=True)
-        masks = model.eval(
-            raw_image,
-            diameter=settings['diameter'],
-            flow_threshold=settings['flow_threshold'],
-            cellprob_threshold=settings['cellprob_threshold'],
-            min_size=settings['min_size'],
-            niter=settings['niter'],
-            resample=bool(settings['resample']),
-        )[0]
-        if masks.shape != (h, w):
-            masks = cv2.resize(masks, (w, h), interpolation=cv2.INTER_NEAREST)
-        cell_list      = _filter_and_rank_mask(masks, raw_image, settings)
-        total_detected = len(np.unique(masks)) - 1
-        is_large       = False
+    masks = model.eval(
+        work_image,
+        diameter=settings['diameter'],
+        flow_threshold=settings['flow_threshold'],
+        cellprob_threshold=settings['cellprob_threshold'],
+        min_size=settings['min_size'],
+        niter=settings['niter'],
+        resample=bool(settings['resample']),
+    )[0]
+    if masks.shape != (H_img, W_img):
+        masks = cv2.resize(masks, (W_img, H_img), interpolation=cv2.INTER_NEAREST)
+    cell_list = _filter_and_rank_mask(masks, work_image, settings)
+    total_detected = len(np.unique(masks)) - 1
 
     thickness  = settings['contour_thickness']
     font_scale = settings['font_scale']
 
     # ── 标注结果图 ────────────────────────────────────────────────────────────
-    res_img = raw_image.copy()
+    res_img = work_image.copy()
     if cell_list:
         bad_cells    = [c for c in cell_list if c.get('is_bad', False)]
         normal_cells = [c for c in cell_list if not c.get('is_bad', False)]
@@ -483,26 +288,16 @@ def process_image(model, image_path, results_dir, settings):
         other_normal = normal_cells[top_n:]
 
         # 暗区压暗遮罩
-        if is_large:
-            for cell in cell_list:
-                cx, cy = cell["pos"]
-                ir     = max(1, int(cell["er"] * 0.8))
-                gy, gx = cell["gy"], cell["gx"]
-                dist   = np.sqrt((gy - cy) ** 2 + (gx - cx) ** 2)
-                ring   = dist >= ir
-                res_img[gy[ring], gx[ring]] = (
-                    res_img[gy[ring], gx[ring]] * 0.6).astype(np.uint8)
-        else:
-            for cell in cell_list:
-                cx, cy  = cell["pos"]
-                er_int  = max(1, int(cell["er"]))
-                ir_int  = max(1, int(cell["er"] * 0.8))
-                outer_m = np.zeros((H_img, W_img), dtype=np.uint8)
-                inner_m = np.zeros((H_img, W_img), dtype=np.uint8)
-                cv2.circle(outer_m, (cx, cy), er_int, 1, -1)
-                cv2.circle(inner_m, (cx, cy), ir_int, 1, -1)
-                ring = (outer_m > 0) & (inner_m == 0) & (cell["mask"] > 0)
-                res_img[ring] = (res_img[ring] * 0.6).astype(np.uint8)
+        for cell in cell_list:
+            cx, cy  = cell["pos"]
+            er_int  = max(1, int(cell["er"]))
+            ir_int  = max(1, int(cell["er"] * 0.8))
+            outer_m = np.zeros((H_img, W_img), dtype=np.uint8)
+            inner_m = np.zeros((H_img, W_img), dtype=np.uint8)
+            cv2.circle(outer_m, (cx, cy), er_int, 1, -1)
+            cv2.circle(inner_m, (cx, cy), ir_int, 1, -1)
+            ring = (outer_m > 0) & (inner_m == 0) & (cell["mask"] > 0)
+            res_img[ring] = (res_img[ring] * 0.6).astype(np.uint8)
 
         # 红色：坏细胞
         for cell in bad_cells:
@@ -552,8 +347,10 @@ def process_image(model, image_path, results_dir, settings):
             os.path.join(crop_dir, f"top{rank}.png"))
         print(f"  Top{rank} 裁剪图已保存", flush=True)
 
+    csv_header = "编号,状态,标记原因,直径(px),坐标X,坐标Y,亮度值,空洞比例,缺口比例\n"
     with open(os.path.join(save_dir, f"{stem}_data.csv"), 'w', encoding='utf-8') as f:
-        f.write("编号,状态,标记原因,直径(px),坐标X,坐标Y,亮度值,空洞比例,缺口比例\n")
+        f.write(f"# 坐标系: 缩放后图片 ({W_img}x{H_img})\n")
+        f.write(csv_header)
         for i, cell in enumerate(cell_list, start=1):
             cx, cy       = cell["pos"]
             diameter     = round(cell["er"] * 2, 1)
@@ -562,6 +359,20 @@ def process_image(model, image_path, results_dir, settings):
             hole_ratio   = round(cell.get('dark_ratio', 0.0), 4)
             defect_ratio = round(cell.get('defect_ratio', 0.0), 4)
             f.write(f"{i},{status},{reason},{diameter},{cx},{cy},{int(cell['brightness'])},{hole_ratio},{defect_ratio}\n")
+
+    with open(os.path.join(save_dir, f"{stem}_data_original.csv"), 'w', encoding='utf-8') as f:
+        f.write(f"# 坐标系: 原图 ({orig_w}x{orig_h}), scale={scale:.4f}\n")
+        f.write(csv_header)
+        for i, cell in enumerate(cell_list, start=1):
+            cx, cy       = cell["pos"]
+            orig_cx      = int(cx / scale)
+            orig_cy      = int(cy / scale)
+            orig_diameter = round(cell["er"] * 2 / scale, 1)
+            status       = '!!!BAD!!!' if cell.get('is_bad', False) else 'OK'
+            reason       = cell.get('reason', '') or '-'
+            hole_ratio   = round(cell.get('dark_ratio', 0.0), 4)
+            defect_ratio = round(cell.get('defect_ratio', 0.0), 4)
+            f.write(f"{i},{status},{reason},{orig_diameter},{orig_cx},{orig_cy},{int(cell['brightness'])},{hole_ratio},{defect_ratio}\n")
 
     top1    = cell_list[0] if cell_list else None
     summary = f"  检测: {total_detected}  有效: {len(cell_list)}"
@@ -581,8 +392,7 @@ def main():
     os.makedirs(results_dir, exist_ok=True)
 
     settings = load_settings()
-    print(f"  diameter={settings['diameter']}  top_n={settings['top_n']}  large_mode={settings['large_mode']}", flush=True)
-    print(f"  tile={settings['tile_w']}x{settings['tile_h']}  overlap={settings['tile_overlap']}", flush=True)
+    print(f"  diameter={settings['diameter']}  top_n={settings['top_n']}  resize_threshold={settings['resize_area_threshold']}", flush=True)
 
     exts   = {'.tif', '.tiff', '.png', '.jpg', '.jpeg'}
     images = [
