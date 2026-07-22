@@ -6,7 +6,6 @@ diameter = 120
 flow_threshold = 0.95
 cellprob_threshold = 1.0
 min_size = 200
-resample = 0
 niter = 200
 
 # === 过滤参数 ===

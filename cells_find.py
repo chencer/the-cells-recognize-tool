@@ -19,7 +19,7 @@ def get_resource_path(relative_path):
 def load_settings():
     defaults = {
         'diameter': 120, 'flow_threshold': 0.95, 'cellprob_threshold': 1.0,
-        'min_size': 200, 'resample': 0, 'niter': 200,
+        'min_size': 200, 'niter': 200,
         'hull_comp': 0.85, 'circle_comp': 0.65, 'dark_threshold': 15,
         'area_ratio': 0.15, 'circularity': 0.5, 'min_pixels': 50,
         'brightness_top_pct': 0.05,
@@ -269,7 +269,6 @@ def process_image(model, image_path, results_dir, settings):
         cellprob_threshold=settings['cellprob_threshold'],
         min_size=settings['min_size'],
         niter=settings['niter'],
-        resample=bool(settings['resample']),
     )[0]
     if masks.shape != (H_img, W_img):
         masks = cv2.resize(masks, (W_img, H_img), interpolation=cv2.INTER_NEAREST)
