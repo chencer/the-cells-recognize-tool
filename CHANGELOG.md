@@ -1,5 +1,26 @@
 # Changelog
 
+## v2.4.0 — 2026-05-13
+
+### 新功能
+- 升级 Cellpose v3 → v4.1.1，支持 cpsam 模型（SAM-based，1.2G）
+- 新增坏细胞检测：HOLE（内部空洞）+ BROKEN（形状破碎），共用 `_detect_defects()` 函数
+- 三色描边标注：红=坏细胞、绿=Top N、黄=普通有效细胞
+- 新增亮场排序模式（`sort_descending=0`，由暗到亮）
+- 新增排序开关（`enable_sort`），关闭后不标注 Top N
+- `model_name` 可配置，本地同名文件优先加载
+- CSV 新增列：状态、标记原因、空洞比例、缺口比例
+
+### 修复
+- 移除 `tile` kwarg（v4 已废弃）
+- 移除 `channels=[0,0]` kwarg（v4 已废弃）
+- cpsam 模型返回低分辨率 mask 时自动 resize 到原图尺寸
+- 移除 `torch.load` 覆盖（与 v4 序列化机制冲突）
+
+### 移除
+- 移除 `_raw_detections.png` 诊断图输出
+- 移除 Top N CSV（`_top{n}.csv`）冗余输出
+
 ## v2.3.0 — 2026-05-13
 
 ### 新功能
