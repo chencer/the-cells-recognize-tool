@@ -1,5 +1,22 @@
 # Changelog
 
+## v2.5.0 — 2026-07-23
+
+### 新功能
+- 等比例缩放替代分块识别（超过 9M 像素自动缩放到最长边 4096px）
+- 双 CSV 输出：`data.csv`（缩放坐标）+ `data_original.csv`（原图坐标，含 scale 注释）
+- 坏细胞参数固化：`bad_defect_depth_ratio=0.08`、`bad_defect_area_ratio=0.03`
+
+### 优化
+- 边缘细胞排除 BROKEN 判定，避免轮廓截断产生假缺口
+- 废弃边缘暗区检测（`bad_rim_*`）和累计缺陷检测（`bad_defect_sum_*`），在亮场图上全部误判
+- `_detect_defects` 函数接口简化，去除无效参数
+
+### 移除
+- 移除分块识别逻辑（`_tile_and_merge`、`_filter_and_rank_tile`）
+- 移除 `large_mode`、`tile_w`、`tile_h`、`tile_overlap` 参数
+- 移除 `bad_rim_inner`、`bad_rim_dark_ratio`、`bad_defect_min_depth`、`bad_defect_sum_ratio` 参数
+
 ## v2.4.0 — 2026-05-13
 
 ### 新功能

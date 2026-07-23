@@ -233,7 +233,7 @@ details[open] .faq-body{max-height:200px;padding-bottom:var(--sp-xl)}
           <tr><td>flow_threshold</td><td>0.95</td><td>流场一致性，越低检测越宽松</td><td><span class="range">0.1–1.0</span></td></tr>
           <tr><td>cellprob_threshold</td><td>1.0</td><td>细胞概率门槛，越低检测越多</td><td><span class="range">-6.0–6.0</span></td></tr>
           <tr><td>min_size</td><td>200</td><td>最小细胞面积（像素），排除过小区域</td><td><span class="range">50–500</span></td></tr>
-          <tr><td>resample</td><td>0</td><td>是否重采样，1=开启（更慢更准）</td><td><span class="range">0 或 1</span></td></tr>
+          <tr><td>model_name</td><td>cpsam</td><td>模型名称，本地同名文件优先；cpsam=v4 SAM 模型，cyto3=v3 荧光</td><td><span class="range">cpsam / cyto3</span></td></tr>
           <tr><td>niter</td><td>200</td><td>迭代次数，越少越快</td><td><span class="range">50–400</span></td></tr>
         </tbody>
       </table>
@@ -256,27 +256,43 @@ details[open] .faq-body{max-height:200px;padding-bottom:var(--sp-xl)}
     </div>
 
     <div class="table-group">
-      <div class="table-group-title purple">大图分块参数</div>
+      <div class="table-group-title purple">大图缩放参数</div>
       <table>
         <thead><tr><th>参数</th><th>默认值</th><th>说明</th><th>建议范围</th></tr></thead>
         <tbody>
-          <tr><td>large_mode</td><td>1</td><td>大图处理方式，1=自动分块，0=整图</td><td><span class="range">0 或 1</span></td></tr>
-          <tr><td>tile_w</td><td>2048</td><td>分块宽度（像素）</td><td><span class="range">1024–4096</span></td></tr>
-          <tr><td>tile_h</td><td>1080</td><td>分块高度（像素）</td><td><span class="range">512–2160</span></td></tr>
-          <tr><td>tile_overlap</td><td>0.2</td><td>分块重叠比例</td><td><span class="range">0.1–0.3</span></td></tr>
+          <tr><td>resize_area_threshold</td><td>9000000</td><td>像素面积超过此值自动等比缩放（9M≈3000×3000）</td><td><span class="range">4M–20M</span></td></tr>
+          <tr><td>resize_max_side</td><td>4096</td><td>缩放后最长边像素数</td><td><span class="range">2048–8192</span></td></tr>
         </tbody>
       </table>
     </div>
 
     <div class="table-group">
-      <div class="table-group-title amber">输出样式参数</div>
+      <div class="table-group-title amber">输出 / 排序 / 模型参数</div>
       <table>
         <thead><tr><th>参数</th><th>默认值</th><th>说明</th><th>建议范围</th></tr></thead>
         <tbody>
-          <tr><td>top_n</td><td>3</td><td>高亮显示最亮的前 N 个细胞</td><td><span class="range">1–20</span></td></tr>
+          <tr><td>top_n</td><td>3</td><td>高亮显示排名前 N 个细胞（绿色）</td><td><span class="range">1–20</span></td></tr>
           <tr><td>crop_pad</td><td>2.0</td><td>裁剪图范围倍数（相对细胞半径）</td><td><span class="range">1.5–3.0</span></td></tr>
           <tr><td>contour_thickness</td><td>2</td><td>描边线宽（像素）</td><td><span class="range">1–5</span></td></tr>
           <tr><td>font_scale</td><td>0.7</td><td>标注文字大小</td><td><span class="range">0.3–1.5</span></td></tr>
+          <tr><td>sort_descending</td><td>1</td><td>排序方向：1=由亮到暗（荧光），0=由暗到亮（亮场）</td><td><span class="range">0 或 1</span></td></tr>
+          <tr><td>enable_sort</td><td>1</td><td>排序开关：0=关闭 Top N 标注</td><td><span class="range">0 或 1</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="table-group">
+      <div class="table-group-title" style="color:#f87171">坏细胞检测参数</div>
+      <table>
+        <thead><tr><th>参数</th><th>默认值</th><th>说明</th><th>建议范围</th></tr></thead>
+        <tbody>
+          <tr><td>enable_bad_detection</td><td>1</td><td>坏细胞检测总开关，0=关闭</td><td><span class="range">0 或 1</span></td></tr>
+          <tr><td>bad_dark_threshold</td><td>60</td><td>暗区像素绝对亮度阈值</td><td><span class="range">30–100</span></td></tr>
+          <tr><td>bad_dark_ratio</td><td>0.10</td><td>内圈暗像素占比超过此值判为 HOLE</td><td><span class="range">0.05–0.3</span></td></tr>
+          <tr><td>bad_inner_ratio</td><td>0.85</td><td>暗区检测内圈比例（排除外圈暗环）</td><td><span class="range">0.6–0.95</span></td></tr>
+          <tr><td>bad_defect_depth_ratio</td><td>0.08</td><td>凸包最大缺陷深度/半径 超过此值判为 BROKEN</td><td><span class="range">0.05–0.2</span></td></tr>
+          <tr><td>bad_defect_area_ratio</td><td>0.03</td><td>凸包面积差/凸包面积 超过此值判为 BROKEN</td><td><span class="range">0.02–0.1</span></td></tr>
+          <tr><td>bad_edge_margin</td><td>20</td><td>距图像边界此像素内的细胞跳过 BROKEN 判定</td><td><span class="range">10–50</span></td></tr>
         </tbody>
       </table>
     </div>
@@ -294,11 +310,10 @@ details[open] .faq-body{max-height:200px;padding-bottom:var(--sp-xl)}
       <div class="file-tree">
         <div class="dir">results/</div>
         <div>&nbsp;&nbsp;└── sample/</div>
-        <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;├── sample_result.png &nbsp;&nbsp;<span class="note">← 标注结果图，Top N 绿色高亮</span></div>
-        <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;├── sample_raw_detections.png &nbsp;&nbsp;<span class="note">← 过滤前所有原始检测点</span></div>
-        <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;├── sample_top3.csv &nbsp;&nbsp;<span class="note">← Top N 细胞坐标和亮度</span></div>
-        <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;├── sample_data.csv &nbsp;&nbsp;<span class="note">← 全部有效细胞数据</span></div>
-        <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;└── crop/ &nbsp;&nbsp;<span class="note">← 子文件夹，存放裁剪图</span></div>
+        <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;├── sample_result.png &nbsp;&nbsp;<span class="note">← 标注结果图，三色描边</span></div>
+        <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;├── sample_data.csv &nbsp;&nbsp;<span class="note">← 全部细胞数据（缩放后坐标）</span></div>
+        <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;├── sample_data_original.csv &nbsp;&nbsp;<span class="note">← 全部细胞数据（原图坐标）</span></div>
+        <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;└── crop/ &nbsp;&nbsp;<span class="note">← 子文件夹，存放 Top N 裁剪图</span></div>
         <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;├── top1.png</div>
         <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;├── top2.png</div>
         <div>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;└── top3.png</div>
@@ -309,11 +324,10 @@ details[open] .faq-body{max-height:200px;padding-bottom:var(--sp-xl)}
       <table>
         <thead><tr><th>文件</th><th>说明</th></tr></thead>
         <tbody>
-          <tr><td>sample_result.png</td><td>标注后的结果图，Top N 细胞绿色轮廓，其余黄色</td></tr>
-          <tr><td>sample_raw_detections.png</td><td>过滤前的诊断图，显示所有原始检测点</td></tr>
-          <tr><td>sample_top3.csv</td><td>最亮前 N 个细胞的坐标与亮度值</td></tr>
-          <tr><td>sample_data.csv</td><td>所有有效细胞的编号、直径、坐标、亮度</td></tr>
-          <tr><td>crop/top1.png …</td><td>Top N 细胞的放大裁剪图，保存在 crop 子文件夹里</td></tr>
+          <tr><td>sample_result.png</td><td>标注结果图：绿=Top N，红=坏细胞附原因，黄=其余正常</td></tr>
+          <tr><td>sample_data.csv</td><td>全部细胞数据，使用缩放后坐标（头部注明图片尺寸）</td></tr>
+          <tr><td>sample_data_original.csv</td><td>全部细胞数据，坐标换算为原图坐标（头部注明 scale）</td></tr>
+          <tr><td>crop/top1.png …</td><td>Top N 细胞的放大裁剪图，保存在 crop/ 子文件夹</td></tr>
         </tbody>
       </table>
     </div>

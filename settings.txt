@@ -38,38 +38,21 @@ sort_descending = 1
 enable_sort = 1
 
 # === 坏细胞检测 ===
-# 内部暗区检测：内部像素低于此值的比例超过 bad_dark_ratio 则判为坏细胞
+# 内部暗区检测：内圈（85%半径内）暗像素占比超过此值判为坏细胞
 bad_dark_threshold = 60
 bad_dark_ratio = 0.10
-# 形状破损检测：凸包完整度低于此值判为坏细胞
 bad_hull_threshold = 0.90
-# 坏细胞检测总开关 (1=开启, 0=关闭)
 enable_bad_detection = 1
-# 暗区判定只看内圈的比例（排除外圈黑边，0.85 = 内 85%，覆盖边缘暗点）
 bad_inner_ratio = 0.85
 
 # === 边缘破损检测 ===
-# 凸包缺陷深度超过细胞半径此比例判为破损
-bad_defect_depth_ratio = 0.06
+# 凸包最大缺陷深度超过细胞半径此比例判为破损
+bad_defect_depth_ratio = 0.08
 # 凸包面积与细胞面积差超过此比例判为破损
-bad_defect_area_ratio = 0.05
-
-# === 多缺陷累计判定 ===
-# 单个缺口最小深度比（低于此值的缺口忽略）
-bad_defect_min_depth = 0.03
-# 累计缺口深度总和超过此值判为破损
-bad_defect_sum_ratio = 0.10
-
-# === 边缘细胞排除 ===
-# 距离图像边界此像素内的细胞不做破损判定
+bad_defect_area_ratio = 0.03
+# 距图像边界此像素内的细胞跳过 BROKEN 判定
 bad_edge_margin = 20
 
-# === 边缘暗区检测（细胞边缘黑色缺口）===
-# 检测区域：细胞半径的此比例到 1.0 之间的环形区
-bad_rim_inner = 0.85
-# 环形区暗像素占比超过此值判为边缘破损
-bad_rim_dark_ratio = 0.25
-
-# === Cellpose 模型名称 (cyto3 / brightfield / phase3D) ===
+# === Cellpose 模型名称 (cyto3 / cpsam 等) ===
 # 本地有同名文件时优先加载本地，否则使用内置模型
 model_name = cpsam
