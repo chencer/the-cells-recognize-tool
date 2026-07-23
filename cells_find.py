@@ -33,7 +33,10 @@ def load_settings():
         'hole_rel_ratio': 0.35, 'hole_min_area_ratio': 0.01,
         'hole_extent_min': 0.35, 'hole_area_ratio': 0.03,
         'defect_depth_ratio': 0.35,
-        'bad_defect_depth_ratio': 0.15, 'bad_defect_area_ratio': 0.05,
+        'bad_defect_depth_ratio': 0.06, 'bad_defect_area_ratio': 0.05,
+        'bad_defect_min_depth': 0.03, 'bad_defect_sum_ratio': 0.10,
+        'bad_edge_margin': 20,
+        'bad_rim_inner': 0.85, 'bad_rim_dark_ratio': 0.25,
     }
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'settings.txt')
     if os.path.exists(path):
@@ -85,14 +88,27 @@ def load_model(settings):
 
 
 # --- 坏细胞检测：内部空洞 + 边缘破损（两路径共用）---
-def _detect_defects(local_gray, local_mask, er, settings):
-    """返回 (is_bad, hole_ratio, defect_ratio, reason)"""
+def _detect_defects(local_gray, local_mask, er, settings,
+                    gy=None, gx=None, gray_full=None,
+                    bbox_global=None, img_shape=None):
+    """返回 (is_bad, hole_ratio, defect_ratio, sum_ratio, rim_dark_ratio, reason)"""
     m = local_mask.astype(np.uint8)
     mb = m > 0
     cell_area = int(mb.sum())
     if cell_area == 0:
-        return False, 0.0, 0.0, ""
+        return False, 0.0, 0.0, 0.0, 0.0, ""
     reason = []
+
+    # 边缘细胞判定（贴边细胞跳过 BROKEN，避免误判）
+    touches_edge = False
+    if bbox_global is not None and img_shape is not None:
+        margin = settings['bad_edge_margin']
+        H_img, W_img = img_shape
+        y0, x0, y1, x1 = bbox_global
+        touches_edge = (
+            y0 < margin or x0 < margin or
+            y1 > H_img - margin or x1 > W_img - margin
+        )
 
     # 线A：内部实心黑洞（相对亮度 + 连通域面积 + 实心度）
     core_ref = float(np.median(local_gray[mb]))
@@ -115,8 +131,9 @@ def _detect_defects(local_gray, local_mask, er, settings):
     if hole_ratio > settings['hole_area_ratio']:
         reason.append('HOLE')
 
-    # 线B：边缘缺口 / 形状破碎（凸包缺陷深度 + 凸包面积差）
+    # 线B：边缘缺口 / 形状破碎（凸包缺陷深度累计 + 凸包面积差）
     defect_ratio = 0.0
+    sum_ratio = 0.0
     is_broken = False
     cnts, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if cnts:
@@ -127,24 +144,48 @@ def _detect_defects(local_gray, local_mask, er, settings):
                 defects = cv2.convexityDefects(cnt, hull_idx)
                 if defects is not None:
                     max_depth = 0
+                    sum_depth = 0
+                    min_depth_px = settings['bad_defect_min_depth'] * er
                     for i in range(defects.shape[0]):
                         s, e, f, d = defects[i, 0]
-                        max_depth = max(max_depth, d / 256.0)
+                        depth = d / 256.0
+                        if depth >= min_depth_px:
+                            sum_depth += depth
+                        max_depth = max(max_depth, depth)
                     defect_ratio = max_depth / er if er > 0 else 0.0
-                    if defect_ratio > settings['bad_defect_depth_ratio']:
-                        is_broken = True
+                    sum_ratio = sum_depth / er if er > 0 else 0.0
+                    if not touches_edge:
+                        if defect_ratio > settings['bad_defect_depth_ratio']:
+                            is_broken = True
+                        elif sum_ratio > settings['bad_defect_sum_ratio']:
+                            is_broken = True
         except Exception:
             pass
         hull_pts = cv2.convexHull(cnt)
         hull_area = cv2.contourArea(hull_pts)
-        if hull_area > 0:
+        if not touches_edge and hull_area > 0:
             area_diff_ratio = (hull_area - cell_area) / hull_area
             if area_diff_ratio > settings['bad_defect_area_ratio']:
                 is_broken = True
+
+    # 线C：边缘暗区检测（细胞外圈环形区暗像素占比）
+    rim_dark_ratio = 0.0
+    if not touches_edge and gy is not None and gx is not None and gray_full is not None:
+        cy_c = int(np.mean(gy))
+        cx_c = int(np.mean(gx))
+        dist = np.sqrt((gx - cx_c) ** 2 + (gy - cy_c) ** 2)
+        rim_mask = (dist >= er * settings['bad_rim_inner']) & (dist <= er)
+        if np.sum(rim_mask) > 0:
+            rim_pixels = gray_full[gy[rim_mask], gx[rim_mask]]
+            rim_dark_count = np.sum(rim_pixels < settings['bad_dark_threshold'])
+            rim_dark_ratio = rim_dark_count / len(rim_pixels)
+            if rim_dark_ratio > settings['bad_rim_dark_ratio']:
+                is_broken = True
+
     if is_broken:
         reason.append('BROKEN')
 
-    return (len(reason) > 0), hole_ratio, defect_ratio, '+'.join(reason)
+    return (len(reason) > 0), hole_ratio, defect_ratio, sum_ratio, rim_dark_ratio, '+'.join(reason)
 
 
 # --- 过滤链（基于 cellpose mask）---
@@ -226,15 +267,18 @@ def _filter_and_rank_mask(masks, raw_image, settings):
                 ly1, lx1 = int(ys0.max()), int(xs0.max())
                 local_mask = c["mask"][ly0:ly1 + 1, lx0:lx1 + 1]
                 local_gray = gray[ly0:ly1 + 1, lx0:lx1 + 1]
-                is_bad, hole_ratio, defect_ratio, bad_reason = _detect_defects(
-                    local_gray, local_mask, c["er"], settings)
+                is_bad, hole_ratio, defect_ratio, sum_ratio, rim_dark_ratio, bad_reason = _detect_defects(
+                    local_gray, local_mask, c["er"], settings,
+                    gy=ys0, gx=xs0, gray_full=gray,
+                    bbox_global=(ly0, lx0, ly1, lx1), img_shape=(H_img, W_img))
             else:
-                is_bad, hole_ratio, defect_ratio, bad_reason = False, 0.0, 0.0, ""
+                is_bad, hole_ratio, defect_ratio, sum_ratio, rim_dark_ratio, bad_reason = False, 0.0, 0.0, 0.0, 0.0, ""
             cell_list.append({
                 "brightness": peak, "pos": (cx, cy),
                 "contours": c["contours"], "mask": c["mask"], "er": c["er"],
                 "is_bad": is_bad, "dark_ratio": hole_ratio,
-                "defect_ratio": defect_ratio, "reason": bad_reason,
+                "defect_ratio": defect_ratio, "sum_ratio": sum_ratio,
+                "rim_dark_ratio": rim_dark_ratio, "reason": bad_reason,
             })
 
     if settings['enable_sort']:
@@ -359,32 +403,36 @@ def process_image(model, image_path, results_dir, settings):
             os.path.join(crop_dir, f"top{rank}.png"))
         print(f"  Top{rank} 裁剪图已保存", flush=True)
 
-    csv_header = "编号,状态,标记原因,直径(px),坐标X,坐标Y,亮度值,空洞比例,缺口比例\n"
+    csv_header = "编号,状态,标记原因,直径(px),坐标X,坐标Y,亮度值,空洞比例,缺口比例,累计缺口比,边缘暗区比\n"
     with open(os.path.join(save_dir, f"{stem}_data.csv"), 'w', encoding='utf-8') as f:
         f.write(f"# 坐标系: 缩放后图片 ({W_img}x{H_img})\n")
         f.write(csv_header)
         for i, cell in enumerate(cell_list, start=1):
-            cx, cy       = cell["pos"]
-            diameter     = round(cell["er"] * 2, 1)
-            status       = '!!!BAD!!!' if cell.get('is_bad', False) else 'OK'
-            reason       = cell.get('reason', '') or '-'
-            hole_ratio   = round(cell.get('dark_ratio', 0.0), 4)
-            defect_ratio = round(cell.get('defect_ratio', 0.0), 4)
-            f.write(f"{i},{status},{reason},{diameter},{cx},{cy},{int(cell['brightness'])},{hole_ratio},{defect_ratio}\n")
+            cx, cy        = cell["pos"]
+            diameter      = round(cell["er"] * 2, 1)
+            status        = '!!!BAD!!!' if cell.get('is_bad', False) else 'OK'
+            reason        = cell.get('reason', '') or '-'
+            hole_ratio    = round(cell.get('dark_ratio', 0.0), 4)
+            defect_ratio  = round(cell.get('defect_ratio', 0.0), 4)
+            sum_ratio     = round(cell.get('sum_ratio', 0.0), 4)
+            rim_dark_ratio = round(cell.get('rim_dark_ratio', 0.0), 4)
+            f.write(f"{i},{status},{reason},{diameter},{cx},{cy},{int(cell['brightness'])},{hole_ratio},{defect_ratio},{sum_ratio},{rim_dark_ratio}\n")
 
     with open(os.path.join(save_dir, f"{stem}_data_original.csv"), 'w', encoding='utf-8') as f:
         f.write(f"# 坐标系: 原图 ({orig_w}x{orig_h}), scale={scale:.4f}\n")
         f.write(csv_header)
         for i, cell in enumerate(cell_list, start=1):
-            cx, cy       = cell["pos"]
-            orig_cx      = int(cx / scale)
-            orig_cy      = int(cy / scale)
+            cx, cy        = cell["pos"]
+            orig_cx       = int(cx / scale)
+            orig_cy       = int(cy / scale)
             orig_diameter = round(cell["er"] * 2 / scale, 1)
-            status       = '!!!BAD!!!' if cell.get('is_bad', False) else 'OK'
-            reason       = cell.get('reason', '') or '-'
-            hole_ratio   = round(cell.get('dark_ratio', 0.0), 4)
-            defect_ratio = round(cell.get('defect_ratio', 0.0), 4)
-            f.write(f"{i},{status},{reason},{orig_diameter},{orig_cx},{orig_cy},{int(cell['brightness'])},{hole_ratio},{defect_ratio}\n")
+            status        = '!!!BAD!!!' if cell.get('is_bad', False) else 'OK'
+            reason        = cell.get('reason', '') or '-'
+            hole_ratio    = round(cell.get('dark_ratio', 0.0), 4)
+            defect_ratio  = round(cell.get('defect_ratio', 0.0), 4)
+            sum_ratio     = round(cell.get('sum_ratio', 0.0), 4)
+            rim_dark_ratio = round(cell.get('rim_dark_ratio', 0.0), 4)
+            f.write(f"{i},{status},{reason},{orig_diameter},{orig_cx},{orig_cy},{int(cell['brightness'])},{hole_ratio},{defect_ratio},{sum_ratio},{rim_dark_ratio}\n")
 
     top1    = cell_list[0] if cell_list else None
     summary = f"  检测: {total_detected}  有效: {len(cell_list)}"
