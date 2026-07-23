@@ -37,20 +37,30 @@ sort_descending = 1
 # === 排序开关 (1=开启, 0=不排序) ===
 enable_sort = 1
 
-# === 坏细胞检测 ===
-# 内部暗区检测：内圈（85%半径内）暗像素占比超过此值判为坏细胞
-bad_dark_threshold = 60
-bad_dark_ratio = 0.10
-bad_hull_threshold = 0.90
+# === 坏细胞检测总开关 ===
 enable_bad_detection = 1
-bad_inner_ratio = 0.85
 
-# === 边缘破损检测 ===
-# 凸包最大缺陷深度超过细胞半径此比例判为破损
-bad_defect_depth_ratio = 0.08
-# 凸包面积与细胞面积差超过此比例判为破损
-bad_defect_area_ratio = 0.03
-# 距图像边界此像素内的细胞跳过 BROKEN 判定
+# === 内圈整体暗区检测（HOLE）===
+# 亮度低于此值视为暗像素
+bad_dark_threshold = 60
+# 内圈（半径 bad_inner_ratio 以内）暗像素占比超过此值判为 HOLE
+bad_dark_ratio = 0.05
+bad_inner_ratio = 0.7
+
+# === 角度分区暗区检测（HOLE/BROKEN）===
+# 把细胞外圈按角度均分的扇区数量
+bad_sector_count = 12
+# 检测区域：细胞半径的此比例到 1.0 之间的环形区
+bad_sector_inner = 0.6
+# 某扇区暗占比超过平均值此倍数判为异常扇区
+bad_sector_ratio = 1.6
+# 异常扇区数达到此值判为 HOLE（局部边缘虫蛀）
+bad_sector_min_count = 1
+# 异常扇区数达到此值判为 BROKEN（大面积破损）
+bad_broken_sector_count = 4
+
+# === 边缘细胞排除 ===
+# 距图像边界此像素内的细胞跳过角度分区检测
 bad_edge_margin = 20
 
 # === Cellpose 模型名称 (cyto3 / cpsam 等) ===
