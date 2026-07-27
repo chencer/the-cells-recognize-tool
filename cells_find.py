@@ -27,12 +27,10 @@ def load_settings():
         'resize_area_threshold': 9000000, 'resize_max_side': 4096,
         'crop_pad': 2.0, 'contour_thickness': 2, 'font_scale': 0.7,
         'sort_descending': 1, 'enable_sort': 1, 'model_name': 'cyto3',
-        'bad_dark_threshold': 60, 'bad_dark_ratio': 0.05,
-        'enable_bad_detection': 1,
-        'bad_inner_ratio': 0.7, 'bad_edge_margin': 20,
-        'bad_sector_count': 12, 'bad_sector_inner': 0.6,
-        'bad_sector_ratio': 1.6, 'bad_sector_min_count': 1,
-        'bad_broken_sector_count': 4,
+        'bad_dark_threshold': 60, 'enable_bad_detection': 1,
+        'bad_edge_margin': 20,
+        'bad_blob_min_area': 0.01, 'bad_blob_compactness': 0.45,
+        'bad_hole_area': 0.02, 'bad_broken_area': 0.10,
     }
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'settings.txt')
     if os.path.exists(path):
@@ -83,69 +81,48 @@ def load_model(settings):
     return m
 
 
-# --- 坏细胞检测：角度分区暗区检测（两路径共用）---
+# --- 坏细胞检测：暗区连通域检测（两路径共用）---
 def _detect_defects(gy, gx, gray, er, bbox, H_img, W_img, settings):
-    """返回 (is_bad, reasons, dark_ratio, abnormal_sectors)"""
+    """暗区连通域检测：区分环状暗环和团块状虫蛀/破损"""
     reasons = []
-    cy_c = int(np.mean(gy))
-    cx_c = int(np.mean(gx))
-    dist = np.sqrt((gx - cx_c) ** 2 + (gy - cy_c) ** 2)
-    dark_thr = settings['bad_dark_threshold']
+    cell_area = len(gy)
+    max_blob_ratio = 0.0
+    blob_count = 0
 
-    # 边缘细胞判定（贴边细胞跳过角度分区检测）
-    margin = settings['bad_edge_margin']
-    y0, x0, y1, x1 = bbox
-    touches_edge = (
-        y0 < margin or x0 < margin or
-        y1 > H_img - margin or x1 > W_img - margin
-    )
+    ly0, lx0 = bbox[0], bbox[1]
+    lh = bbox[2] - ly0 + 1
+    lw = bbox[3] - lx0 + 1
+    local_cell = np.zeros((lh, lw), dtype=np.uint8)
+    local_cell[gy - ly0, gx - lx0] = 1
+    local_gray = np.zeros((lh, lw), dtype=np.uint8)
+    local_gray[gy - ly0, gx - lx0] = gray[gy, gx]
 
-    # --- 检测1: 内圈整体暗区（中心虫蛀）---
-    inner_mask = dist <= er * settings['bad_inner_ratio']
-    dark_ratio = 0.0
-    if np.sum(inner_mask) > 0:
-        inner_pixels = gray[gy[inner_mask], gx[inner_mask]]
-        dark_ratio = float(np.sum(inner_pixels < dark_thr) / len(inner_pixels))
-        if dark_ratio > settings['bad_dark_ratio']:
-            reasons.append('HOLE')
+    dark_mask = ((local_gray < settings['bad_dark_threshold']) & (local_cell > 0)).astype(np.uint8)
 
-    # --- 检测2: 角度分区暗区（边缘虫蛀/破损）---
-    abnormal_sectors = 0
-    if not touches_edge:
-        n_sec = settings['bad_sector_count']
-        ring_mask = (dist >= er * settings['bad_sector_inner']) & (dist <= er)
-        if np.sum(ring_mask) > n_sec * 5:
-            ring_gy = gy[ring_mask]
-            ring_gx = gx[ring_mask]
-            angles = np.arctan2(ring_gy - cy_c, ring_gx - cx_c)
-            angles = (angles + 2 * np.pi) % (2 * np.pi)
-            sector_idx = (angles / (2 * np.pi) * n_sec).astype(int) % n_sec
-            ring_pixels = gray[ring_gy, ring_gx]
-            is_dark = ring_pixels < dark_thr
+    if np.sum(dark_mask) > 0:
+        n_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(dark_mask, connectivity=8)
+        min_area = cell_area * settings['bad_blob_min_area']
+        for i in range(1, n_labels):
+            blob_area = int(stats[i, cv2.CC_STAT_AREA])
+            if blob_area < min_area:
+                continue
+            bw = int(stats[i, cv2.CC_STAT_WIDTH])
+            bh = int(stats[i, cv2.CC_STAT_HEIGHT])
+            rect_area = bw * bh
+            compactness = blob_area / rect_area if rect_area > 0 else 0.0
+            if compactness < settings['bad_blob_compactness']:
+                continue
+            blob_ratio = blob_area / cell_area
+            max_blob_ratio = max(max_blob_ratio, blob_ratio)
+            blob_count += 1
 
-            sector_ratios = []
-            for s in range(n_sec):
-                sel = sector_idx == s
-                if np.sum(sel) > 0:
-                    sector_ratios.append(float(np.sum(is_dark[sel]) / np.sum(sel)))
-                else:
-                    sector_ratios.append(0.0)
-
-            sector_ratios = np.array(sector_ratios)
-            mean_ratio = float(np.mean(sector_ratios))
-            if mean_ratio > 0:
-                abnormal_sectors = int(np.sum(
-                    sector_ratios > mean_ratio * settings['bad_sector_ratio']))
-
-            if abnormal_sectors >= settings['bad_broken_sector_count']:
-                if 'BROKEN' not in reasons:
-                    reasons.append('BROKEN')
-            elif abnormal_sectors >= settings['bad_sector_min_count']:
-                if 'HOLE' not in reasons:
-                    reasons.append('HOLE')
+    if max_blob_ratio > settings['bad_broken_area']:
+        reasons.append('BROKEN')
+    elif max_blob_ratio > settings['bad_hole_area']:
+        reasons.append('HOLE')
 
     is_bad = len(reasons) > 0
-    return is_bad, reasons, dark_ratio, abnormal_sectors
+    return is_bad, reasons, max_blob_ratio, blob_count
 
 
 
@@ -226,17 +203,17 @@ def _filter_and_rank_mask(masks, raw_image, settings):
                 ys0, xs0 = np.where(c["mask"] > 0)
                 ly0, lx0 = int(ys0.min()), int(xs0.min())
                 ly1, lx1 = int(ys0.max()), int(xs0.max())
-                is_bad, reasons, dark_ratio, abnormal_sectors = _detect_defects(
+                is_bad, reasons, max_blob_ratio, blob_count = _detect_defects(
                     ys0, xs0, gray, c["er"],
                     (ly0, lx0, ly1, lx1), H_img, W_img, settings)
                 bad_reason = '+'.join(reasons)
             else:
-                is_bad, dark_ratio, abnormal_sectors, bad_reason = False, 0.0, 0, ""
+                is_bad, max_blob_ratio, blob_count, bad_reason = False, 0.0, 0, ""
             cell_list.append({
                 "brightness": peak, "pos": (cx, cy),
                 "contours": c["contours"], "mask": c["mask"], "er": c["er"],
-                "is_bad": is_bad, "dark_ratio": dark_ratio,
-                "abnormal_sectors": abnormal_sectors, "reason": bad_reason,
+                "is_bad": is_bad, "max_blob_ratio": max_blob_ratio,
+                "blob_count": blob_count, "reason": bad_reason,
             })
 
     if settings['enable_sort']:
@@ -361,7 +338,7 @@ def process_image(model, image_path, results_dir, settings):
             os.path.join(crop_dir, f"top{rank}.png"))
         print(f"  Top{rank} 裁剪图已保存", flush=True)
 
-    csv_header = "编号,状态,标记原因,直径(px),坐标X,坐标Y,亮度值,空洞比例,异常扇区数\n"
+    csv_header = "编号,状态,标记原因,直径(px),坐标X,坐标Y,亮度值,最大暗块比例,暗块数量\n"
     with open(os.path.join(save_dir, f"{stem}_data.csv"), 'w', encoding='utf-8') as f:
         f.write(f"# 坐标系: 缩放后图片 ({W_img}x{H_img})\n")
         f.write(csv_header)
@@ -370,9 +347,9 @@ def process_image(model, image_path, results_dir, settings):
             diameter      = round(cell["er"] * 2, 1)
             status        = '!!!BAD!!!' if cell.get('is_bad', False) else 'OK'
             reason        = cell.get('reason', '') or '-'
-            hole_ratio        = round(cell.get('dark_ratio', 0.0), 4)
-            abnormal_sectors  = cell.get('abnormal_sectors', 0)
-            f.write(f"{i},{status},{reason},{diameter},{cx},{cy},{int(cell['brightness'])},{hole_ratio},{abnormal_sectors}\n")
+            max_blob_ratio = round(cell.get('max_blob_ratio', 0.0), 4)
+            blob_count     = cell.get('blob_count', 0)
+            f.write(f"{i},{status},{reason},{diameter},{cx},{cy},{int(cell['brightness'])},{max_blob_ratio},{blob_count}\n")
 
     with open(os.path.join(save_dir, f"{stem}_data_original.csv"), 'w', encoding='utf-8') as f:
         f.write(f"# 坐标系: 原图 ({orig_w}x{orig_h}), scale={scale:.4f}\n")
@@ -384,9 +361,9 @@ def process_image(model, image_path, results_dir, settings):
             orig_diameter = round(cell["er"] * 2 / scale, 1)
             status        = '!!!BAD!!!' if cell.get('is_bad', False) else 'OK'
             reason        = cell.get('reason', '') or '-'
-            hole_ratio        = round(cell.get('dark_ratio', 0.0), 4)
-            abnormal_sectors  = cell.get('abnormal_sectors', 0)
-            f.write(f"{i},{status},{reason},{orig_diameter},{orig_cx},{orig_cy},{int(cell['brightness'])},{hole_ratio},{abnormal_sectors}\n")
+            max_blob_ratio = round(cell.get('max_blob_ratio', 0.0), 4)
+            blob_count     = cell.get('blob_count', 0)
+            f.write(f"{i},{status},{reason},{orig_diameter},{orig_cx},{orig_cy},{int(cell['brightness'])},{max_blob_ratio},{blob_count}\n")
 
     top1    = cell_list[0] if cell_list else None
     summary = f"  检测: {total_detected}  有效: {len(cell_list)}"
