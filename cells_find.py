@@ -30,8 +30,10 @@ def load_settings():
         'bad_dark_threshold': 60, 'enable_bad_detection': 1,
         'bad_edge_margin': 20,
         'bad_blob_min_area': 0.01, 'bad_blob_compactness': 0.35,
-        'bad_hole_area': 0.02, 'bad_broken_area': 0.10,
+        'bad_broken_area': 0.10,
         'bad_blob_angle_span': 180,
+        'bad_blob_center_radius': 0.5,
+        'bad_hole_area_center': 0.005, 'bad_hole_area_edge': 0.025,
     }
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'settings.txt')
     if os.path.exists(path):
@@ -84,11 +86,12 @@ def load_model(settings):
 
 # --- 坏细胞检测：暗区连通域检测（两路径共用）---
 def _detect_defects(gy, gx, gray, er, bbox, H_img, W_img, settings):
-    """暗区连通域检测：区分环状暗环和团块状虫蛀/破损"""
+    """暗区连通域检测：区分环状暗环和团块状虫蛀/破损，按位置分级判定"""
     reasons = []
     cell_area = len(gy)
     max_blob_ratio = 0.0
     max_blob_angle_span = 0
+    max_blob_pos = 0.0
     blob_count = 0
     local_cy = float(np.mean(gy - bbox[0]))
     local_cx = float(np.mean(gx - bbox[1]))
@@ -128,19 +131,34 @@ def _detect_defects(gy, gx, gray, er, bbox, H_img, W_img, settings):
                 blob_angle_span = int(np.sum(hist > 0)) * 10
                 if blob_angle_span >= settings['bad_blob_angle_span']:
                     continue
+
+            # 暗块中心到细胞中心的相对距离（0=中心，1=边缘）
+            blob_cy = float(centroids[i][1])
+            blob_cx = float(centroids[i][0])
+            blob_dist = np.sqrt((blob_cy - local_cy) ** 2 + (blob_cx - local_cx) ** 2)
+            rel_pos = blob_dist / er if er > 0 else 1.0
+
+            # 按位置选择面积门槛
+            if rel_pos < settings['bad_blob_center_radius']:
+                hole_thr = settings['bad_hole_area_center']
+            else:
+                hole_thr = settings['bad_hole_area_edge']
+
             blob_ratio = blob_area / cell_area
-            if blob_ratio > max_blob_ratio:
-                max_blob_ratio = blob_ratio
-                max_blob_angle_span = blob_angle_span
-            blob_count += 1
+            if blob_ratio > hole_thr:
+                if blob_ratio > max_blob_ratio:
+                    max_blob_ratio = blob_ratio
+                    max_blob_angle_span = blob_angle_span
+                    max_blob_pos = rel_pos
+                blob_count += 1
 
     if max_blob_ratio > settings['bad_broken_area']:
         reasons.append('BROKEN')
-    elif max_blob_ratio > settings['bad_hole_area']:
+    elif max_blob_ratio > 0:
         reasons.append('HOLE')
 
     is_bad = len(reasons) > 0
-    return is_bad, reasons, max_blob_ratio, blob_count, max_blob_angle_span
+    return is_bad, reasons, max_blob_ratio, blob_count, max_blob_angle_span, max_blob_pos
 
 
 
@@ -221,17 +239,18 @@ def _filter_and_rank_mask(masks, raw_image, settings):
                 ys0, xs0 = np.where(c["mask"] > 0)
                 ly0, lx0 = int(ys0.min()), int(xs0.min())
                 ly1, lx1 = int(ys0.max()), int(xs0.max())
-                is_bad, reasons, max_blob_ratio, blob_count, blob_angle_span = _detect_defects(
+                is_bad, reasons, max_blob_ratio, blob_count, blob_angle_span, blob_pos = _detect_defects(
                     ys0, xs0, gray, c["er"],
                     (ly0, lx0, ly1, lx1), H_img, W_img, settings)
                 bad_reason = '+'.join(reasons)
             else:
-                is_bad, max_blob_ratio, blob_count, blob_angle_span, bad_reason = False, 0.0, 0, 0, ""
+                is_bad, max_blob_ratio, blob_count, blob_angle_span, blob_pos, bad_reason = False, 0.0, 0, 0, 0.0, ""
             cell_list.append({
                 "brightness": peak, "pos": (cx, cy),
                 "contours": c["contours"], "mask": c["mask"], "er": c["er"],
                 "is_bad": is_bad, "max_blob_ratio": max_blob_ratio,
-                "blob_count": blob_count, "blob_angle_span": blob_angle_span, "reason": bad_reason,
+                "blob_count": blob_count, "blob_angle_span": blob_angle_span,
+                "blob_pos": blob_pos, "reason": bad_reason,
             })
 
     if settings['enable_sort']:
@@ -356,7 +375,7 @@ def process_image(model, image_path, results_dir, settings):
             os.path.join(crop_dir, f"top{rank}.png"))
         print(f"  Top{rank} 裁剪图已保存", flush=True)
 
-    csv_header = "编号,状态,标记原因,直径(px),坐标X,坐标Y,亮度值,最大暗块比例,暗块数量,暗块角度覆盖\n"
+    csv_header = "编号,状态,标记原因,直径(px),坐标X,坐标Y,亮度值,最大暗块比例,暗块数量,暗块角度覆盖,暗块相对位置\n"
     with open(os.path.join(save_dir, f"{stem}_data.csv"), 'w', encoding='utf-8') as f:
         f.write(f"# 坐标系: 缩放后图片 ({W_img}x{H_img})\n")
         f.write(csv_header)
@@ -368,7 +387,8 @@ def process_image(model, image_path, results_dir, settings):
             max_blob_ratio  = round(cell.get('max_blob_ratio', 0.0), 4)
             blob_count      = cell.get('blob_count', 0)
             blob_angle_span = cell.get('blob_angle_span', 0)
-            f.write(f"{i},{status},{reason},{diameter},{cx},{cy},{int(cell['brightness'])},{max_blob_ratio},{blob_count},{blob_angle_span}\n")
+            blob_pos        = round(cell.get('blob_pos', 0.0), 3)
+            f.write(f"{i},{status},{reason},{diameter},{cx},{cy},{int(cell['brightness'])},{max_blob_ratio},{blob_count},{blob_angle_span},{blob_pos}\n")
 
     with open(os.path.join(save_dir, f"{stem}_data_original.csv"), 'w', encoding='utf-8') as f:
         f.write(f"# 坐标系: 原图 ({orig_w}x{orig_h}), scale={scale:.4f}\n")
@@ -383,7 +403,8 @@ def process_image(model, image_path, results_dir, settings):
             max_blob_ratio  = round(cell.get('max_blob_ratio', 0.0), 4)
             blob_count      = cell.get('blob_count', 0)
             blob_angle_span = cell.get('blob_angle_span', 0)
-            f.write(f"{i},{status},{reason},{orig_diameter},{orig_cx},{orig_cy},{int(cell['brightness'])},{max_blob_ratio},{blob_count},{blob_angle_span}\n")
+            blob_pos        = round(cell.get('blob_pos', 0.0), 3)
+            f.write(f"{i},{status},{reason},{orig_diameter},{orig_cx},{orig_cy},{int(cell['brightness'])},{max_blob_ratio},{blob_count},{blob_angle_span},{blob_pos}\n")
 
     top1    = cell_list[0] if cell_list else None
     summary = f"  检测: {total_detected}  有效: {len(cell_list)}"
