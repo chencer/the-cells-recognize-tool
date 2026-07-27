@@ -30,12 +30,12 @@ def load_settings():
         'bad_dark_threshold': 60, 'enable_bad_detection': 1,
         'bad_edge_margin': 20,
         'bad_blob_min_area': 0.01, 'bad_blob_compactness': 0.35,
-        'bad_broken_area': 0.10,
+        'bad_broken_area': 0.15,
         'bad_blob_angle_span': 180,
         'bad_blob_center_radius': 0.5,
         'bad_hole_area_center': 0.005, 'bad_hole_area_edge': 0.025,
-        'bad_adaptive_threshold': 1, 'bad_adaptive_ratio': 0.45,
-        'bad_adaptive_inner': 0.6,
+        'bad_adaptive_threshold': 1, 'bad_adaptive_ratio': 0.5,
+        'bad_adaptive_inner': 0.6, 'bad_adaptive_percentile': 75,
     }
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'settings.txt')
     if os.path.exists(path):
@@ -114,7 +114,10 @@ def _detect_defects(gy, gx, gray, er, bbox, H_img, W_img, settings):
         eff_r_full = np.sqrt(cell_area / np.pi)
         inner_sel = dist_all <= eff_r_full * settings['bad_adaptive_inner']
         if np.sum(inner_sel) > 10:
-            base_brightness = float(np.mean(gray[gy[inner_sel], gx[inner_sel]]))
+            inner_vals = gray[gy[inner_sel], gx[inner_sel]]
+            # 用分位数而非平均值，避免暗斑拉低基准造成自我抵消
+            base_brightness = float(np.percentile(
+                inner_vals, settings['bad_adaptive_percentile']))
             dark_thr = base_brightness * settings['bad_adaptive_ratio']
         else:
             dark_thr = float(settings['bad_dark_threshold'])
