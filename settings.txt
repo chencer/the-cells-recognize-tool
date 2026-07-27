@@ -132,7 +132,7 @@ enable_bad_detection = 1
 # 暗块检测阈值模式
 # 0 = 固定阈值（用 bad_dark_threshold）
 # 1 = 自适应阈值（按细胞自身内圈亮度计算）
-bad_adaptive_threshold = 1
+bad_adaptive_threshold = 0
 
 # 自适应阈值基准分位数
 # 作用：用细胞内圈亮度的第 N 百分位作为基准，避免暗斑拉低平均值
@@ -185,14 +185,14 @@ bad_blob_center_radius = 0.5
 # 作用：位于中心区的暗块，面积超过此值判为 HOLE
 # 范围：0.003-0.02
 # 调整：小虫蛀漏检 → 调低
-bad_hole_area_center = 0.005
+bad_hole_area_center = 0.008
 
 # 边缘区暗块面积门槛（占细胞面积比例）
 # 作用：位于边缘区的暗块，面积超过此值才判为 HOLE
 # 原因：细胞边缘暗环局部加厚会形成假暗块，需要更高门槛
 # 范围：0.015-0.05
 # 调整：暗环误判 → 调高；边缘真实虫蛀漏检 → 调低
-bad_hole_area_edge = 0.025
+bad_hole_area_edge = 0.035
 
 # BROKEN 判定阈值（最大暗块面积占细胞比例）
 # 作用：超过此比例标记为 BROKEN（大破损）
