@@ -136,7 +136,10 @@ def _detect_defects(gy, gx, gray, er, bbox, H_img, W_img, settings):
             blob_cy = float(centroids[i][1])
             blob_cx = float(centroids[i][0])
             blob_dist = np.sqrt((blob_cy - local_cy) ** 2 + (blob_cx - local_cx) ** 2)
-            rel_pos = blob_dist / er if er > 0 else 1.0
+            # 用等效半径（由面积反推）替代外接圆半径
+            # 六边形细胞的外接圆半径明显大于实际尺度，会导致位置判断偏移
+            eff_r = np.sqrt(cell_area / np.pi)
+            rel_pos = blob_dist / eff_r if eff_r > 0 else 1.0
 
             # 按位置选择面积门槛
             if rel_pos < settings['bad_blob_center_radius']:
