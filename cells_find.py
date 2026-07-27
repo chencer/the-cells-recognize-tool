@@ -34,6 +34,8 @@ def load_settings():
         'bad_blob_angle_span': 180,
         'bad_blob_center_radius': 0.5,
         'bad_hole_area_center': 0.005, 'bad_hole_area_edge': 0.025,
+        'bad_adaptive_threshold': 1, 'bad_adaptive_ratio': 0.45,
+        'bad_adaptive_inner': 0.6,
     }
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'settings.txt')
     if os.path.exists(path):
@@ -104,7 +106,22 @@ def _detect_defects(gy, gx, gray, er, bbox, H_img, W_img, settings):
     local_gray = np.zeros((lh, lw), dtype=np.uint8)
     local_gray[gy - ly0, gx - lx0] = gray[gy, gx]
 
-    dark_mask = ((local_gray < settings['bad_dark_threshold']) & (local_cell > 0)).astype(np.uint8)
+    # 计算暗块判定阈值
+    if settings['bad_adaptive_threshold']:
+        cy_c = float(np.mean(gy))
+        cx_c = float(np.mean(gx))
+        dist_all = np.sqrt((gy - cy_c) ** 2 + (gx - cx_c) ** 2)
+        eff_r_full = np.sqrt(cell_area / np.pi)
+        inner_sel = dist_all <= eff_r_full * settings['bad_adaptive_inner']
+        if np.sum(inner_sel) > 10:
+            base_brightness = float(np.mean(gray[gy[inner_sel], gx[inner_sel]]))
+            dark_thr = base_brightness * settings['bad_adaptive_ratio']
+        else:
+            dark_thr = float(settings['bad_dark_threshold'])
+    else:
+        dark_thr = float(settings['bad_dark_threshold'])
+
+    dark_mask = ((local_gray < dark_thr) & (local_cell > 0)).astype(np.uint8)
 
     if np.sum(dark_mask) > 0:
         n_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(dark_mask, connectivity=8)
@@ -161,7 +178,7 @@ def _detect_defects(gy, gx, gray, er, bbox, H_img, W_img, settings):
         reasons.append('HOLE')
 
     is_bad = len(reasons) > 0
-    return is_bad, reasons, max_blob_ratio, blob_count, max_blob_angle_span, max_blob_pos
+    return is_bad, reasons, max_blob_ratio, blob_count, max_blob_angle_span, max_blob_pos, dark_thr
 
 
 
@@ -242,18 +259,18 @@ def _filter_and_rank_mask(masks, raw_image, settings):
                 ys0, xs0 = np.where(c["mask"] > 0)
                 ly0, lx0 = int(ys0.min()), int(xs0.min())
                 ly1, lx1 = int(ys0.max()), int(xs0.max())
-                is_bad, reasons, max_blob_ratio, blob_count, blob_angle_span, blob_pos = _detect_defects(
+                is_bad, reasons, max_blob_ratio, blob_count, blob_angle_span, blob_pos, dark_thr = _detect_defects(
                     ys0, xs0, gray, c["er"],
                     (ly0, lx0, ly1, lx1), H_img, W_img, settings)
                 bad_reason = '+'.join(reasons)
             else:
-                is_bad, max_blob_ratio, blob_count, blob_angle_span, blob_pos, bad_reason = False, 0.0, 0, 0, 0.0, ""
+                is_bad, max_blob_ratio, blob_count, blob_angle_span, blob_pos, dark_thr, bad_reason = False, 0.0, 0, 0, 0.0, 0.0, ""
             cell_list.append({
                 "brightness": peak, "pos": (cx, cy),
                 "contours": c["contours"], "mask": c["mask"], "er": c["er"],
                 "is_bad": is_bad, "max_blob_ratio": max_blob_ratio,
                 "blob_count": blob_count, "blob_angle_span": blob_angle_span,
-                "blob_pos": blob_pos, "reason": bad_reason,
+                "blob_pos": blob_pos, "dark_thr": dark_thr, "reason": bad_reason,
             })
 
     if settings['enable_sort']:
@@ -378,7 +395,7 @@ def process_image(model, image_path, results_dir, settings):
             os.path.join(crop_dir, f"top{rank}.png"))
         print(f"  Top{rank} 裁剪图已保存", flush=True)
 
-    csv_header = "编号,状态,标记原因,直径(px),坐标X,坐标Y,亮度值,最大暗块比例,暗块数量,暗块角度覆盖,暗块相对位置\n"
+    csv_header = "编号,状态,标记原因,直径(px),坐标X,坐标Y,亮度值,最大暗块比例,暗块数量,暗块角度覆盖,暗块相对位置,实际暗块阈值\n"
     with open(os.path.join(save_dir, f"{stem}_data.csv"), 'w', encoding='utf-8') as f:
         f.write(f"# 坐标系: 缩放后图片 ({W_img}x{H_img})\n")
         f.write(csv_header)
@@ -391,7 +408,8 @@ def process_image(model, image_path, results_dir, settings):
             blob_count      = cell.get('blob_count', 0)
             blob_angle_span = cell.get('blob_angle_span', 0)
             blob_pos        = round(cell.get('blob_pos', 0.0), 3)
-            f.write(f"{i},{status},{reason},{diameter},{cx},{cy},{int(cell['brightness'])},{max_blob_ratio},{blob_count},{blob_angle_span},{blob_pos}\n")
+            dark_thr        = round(cell.get('dark_thr', 0.0), 1)
+            f.write(f"{i},{status},{reason},{diameter},{cx},{cy},{int(cell['brightness'])},{max_blob_ratio},{blob_count},{blob_angle_span},{blob_pos},{dark_thr}\n")
 
     with open(os.path.join(save_dir, f"{stem}_data_original.csv"), 'w', encoding='utf-8') as f:
         f.write(f"# 坐标系: 原图 ({orig_w}x{orig_h}), scale={scale:.4f}\n")
@@ -407,7 +425,8 @@ def process_image(model, image_path, results_dir, settings):
             blob_count      = cell.get('blob_count', 0)
             blob_angle_span = cell.get('blob_angle_span', 0)
             blob_pos        = round(cell.get('blob_pos', 0.0), 3)
-            f.write(f"{i},{status},{reason},{orig_diameter},{orig_cx},{orig_cy},{int(cell['brightness'])},{max_blob_ratio},{blob_count},{blob_angle_span},{blob_pos}\n")
+            dark_thr        = round(cell.get('dark_thr', 0.0), 1)
+            f.write(f"{i},{status},{reason},{orig_diameter},{orig_cx},{orig_cy},{int(cell['brightness'])},{max_blob_ratio},{blob_count},{blob_angle_span},{blob_pos},{dark_thr}\n")
 
     top1    = cell_list[0] if cell_list else None
     summary = f"  检测: {total_detected}  有效: {len(cell_list)}"
