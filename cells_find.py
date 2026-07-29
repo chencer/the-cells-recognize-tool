@@ -24,9 +24,10 @@ def load_settings():
         'area_ratio': 0.15, 'circularity': 0.5, 'min_pixels': 50,
         'brightness_top_pct': 0.05,
         'top_n': 3,
-        'resize_area_threshold': 9000000, 'resize_max_side': 4096,
+        'resize_scale': 0.15,
         'crop_pad': 2.0, 'contour_thickness': 2, 'font_scale': 0.7,
-        'sort_descending': 1, 'enable_sort': 1, 'model_name': 'cyto3',
+        'sort_descending': 1, 'enable_top_ranking': 1, 'enable_bad_ranking': 1,
+        'model_name': 'cyto3',
         'bad_dark_threshold': 60, 'enable_bad_detection': 1,
         'bad_edge_margin': 20,
         'bad_blob_min_area': 0.01, 'bad_blob_compactness': 0.35,
@@ -276,8 +277,6 @@ def _filter_and_rank_mask(masks, raw_image, settings):
                 "blob_pos": blob_pos, "dark_thr": dark_thr, "reason": bad_reason,
             })
 
-    if settings['enable_sort']:
-        cell_list.sort(key=lambda x: x["brightness"], reverse=bool(settings['sort_descending']))
     print(f"  [Step4] 有效细胞: {len(cell_list)}", flush=True)
     return cell_list
 
@@ -293,20 +292,15 @@ def process_image(model, image_path, results_dir, settings):
         return
 
     orig_h, orig_w = raw_image.shape[:2]
-    scale = 1.0
-
-    if orig_w * orig_h > settings['resize_area_threshold']:
-        max_side = settings['resize_max_side']
-        scale = min(1.0, max_side / max(orig_w, orig_h))
-        if scale < 1.0:
-            new_w = int(orig_w * scale)
-            new_h = int(orig_h * scale)
-            work_image = cv2.resize(raw_image, (new_w, new_h), interpolation=cv2.INTER_AREA)
-            print(f"  大图缩放: {orig_w}x{orig_h} → {new_w}x{new_h} (scale={scale:.4f})", flush=True)
-        else:
-            work_image = raw_image
+    scale = settings['resize_scale']
+    if scale < 1.0:
+        new_w = int(orig_w * scale)
+        new_h = int(orig_h * scale)
+        work_image = cv2.resize(raw_image, (new_w, new_h), interpolation=cv2.INTER_AREA)
+        print(f"  缩放: {orig_w}x{orig_h} → {new_w}x{new_h} (倍率={scale})", flush=True)
     else:
         work_image = raw_image
+        scale = 1.0
 
     H_img, W_img = work_image.shape[:2]
     top_n = settings['top_n']
@@ -332,12 +326,23 @@ def process_image(model, image_path, results_dir, settings):
 
     # ── 标注结果图 ────────────────────────────────────────────────────────────
     res_img = work_image.copy()
-    if cell_list:
-        bad_cells    = [c for c in cell_list if c.get('is_bad', False)]
-        normal_cells = [c for c in cell_list if not c.get('is_bad', False)]
-        top_cells    = normal_cells[:top_n]
-        other_normal = normal_cells[top_n:]
+    bad_cells    = [c for c in cell_list if c.get('is_bad', False)]
+    normal_cells = [c for c in cell_list if not c.get('is_bad', False)]
 
+    # 最亮排行分组（排行开启时按亮度排序，否则保持原序）
+    if settings['enable_top_ranking']:
+        sorted_normal = sorted(normal_cells, key=lambda x: x["brightness"],
+                               reverse=bool(settings['sort_descending']))
+        top_cells    = sorted_normal[:top_n]
+        other_normal = sorted_normal[top_n:]
+    else:
+        top_cells    = []
+        other_normal = normal_cells
+
+    # 破损排行（按暗块面积降序）
+    bad_sorted = sorted(bad_cells, key=lambda x: x.get('max_blob_ratio', 0), reverse=True)
+
+    if cell_list:
         # 暗区压暗遮罩
         for cell in cell_list:
             cx, cy  = cell["pos"]
@@ -350,22 +355,24 @@ def process_image(model, image_path, results_dir, settings):
             ring = (outer_m > 0) & (inner_m == 0) & (cell["mask"] > 0)
             res_img[ring] = (res_img[ring] * 0.6).astype(np.uint8)
 
-        # 红色：坏细胞
-        for cell in bad_cells:
-            cx, cy    = cell["pos"]
-            bad_label = cell.get('reason') or 'BAD'
-            cv2.drawContours(res_img, cell["contours"], -1, (0, 0, 255), thickness)
-            cv2.putText(res_img, bad_label, (cx + 6, cy - 6),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+        # 红色：坏细胞（始终标注，不受排行开关影响）
+        if settings['enable_bad_detection']:
+            for cell in bad_cells:
+                cx, cy    = cell["pos"]
+                bad_label = cell.get('reason') or 'BAD'
+                cv2.drawContours(res_img, cell["contours"], -1, (0, 0, 255), thickness)
+                cv2.putText(res_img, bad_label, (cx + 6, cy - 6),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
 
-        # 黄色：其余正常细胞
-        for idx, cell in enumerate(other_normal, start=top_n + 1):
+        # 黄色：非 top 正常细胞
+        idx_start = top_n + 1 if settings['enable_top_ranking'] else 1
+        for idx, cell in enumerate(other_normal, start=idx_start):
             cx, cy = cell["pos"]
             cv2.drawContours(res_img, cell["contours"], -1, (0, 255, 255), thickness)
             cv2.putText(res_img, str(idx), (cx + 6, cy - 6),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (220, 220, 220), 1)
 
-        # 绿色：top_n 正常细胞
+        # 绿色：top_n 最亮正常细胞
         for rank, cell in enumerate(top_cells, start=1):
             cx, cy = cell["pos"]
             cv2.drawContours(res_img, cell["contours"], -1, (0, 255, 0), thickness)
@@ -381,32 +388,48 @@ def process_image(model, image_path, results_dir, settings):
     cv2.imencode('.png', res_img)[1].tofile(
         os.path.join(save_dir, f"{stem}_result.png"))
 
-    crop_dir = os.path.join(save_dir, "crop")
-    os.makedirs(crop_dir, exist_ok=True)
-    _top_for_crop = [c for c in cell_list if not c.get('is_bad', False)][:top_n]
-    for rank, cell in enumerate(_top_for_crop, start=1):
-        cx, cy = cell["pos"]
-        pad    = int(cell["er"] * settings['crop_pad'])
-        y1     = max(0, cy - pad)
-        y2     = min(H_img, cy + pad)
-        x1     = max(0, cx - pad)
-        x2     = min(W_img, cx + pad)
-        crop   = res_img[y1:y2, x1:x2].copy()
-        cv2.putText(crop, f"Top {rank}", (10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
-        cv2.imencode('.png', crop)[1].tofile(
-            os.path.join(crop_dir, f"top{rank}.png"))
-        print(f"  Top{rank} 裁剪图已保存", flush=True)
+    # 最亮细胞裁剪图
+    if settings['enable_top_ranking']:
+        top_crop_dir = os.path.join(save_dir, "crop", "top")
+        os.makedirs(top_crop_dir, exist_ok=True)
+        for rank, cell in enumerate(top_cells, start=1):
+            cx, cy = cell["pos"]
+            pad = int(cell["er"] * settings['crop_pad'])
+            y1 = max(0, cy - pad); y2 = min(H_img, cy + pad)
+            x1 = max(0, cx - pad); x2 = min(W_img, cx + pad)
+            crop = res_img[y1:y2, x1:x2].copy()
+            cv2.putText(crop, f"Top {rank}", (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+            cv2.imencode('.png', crop)[1].tofile(
+                os.path.join(top_crop_dir, f"top{rank}.png"))
+            print(f"  Top{rank} 裁剪图已保存", flush=True)
+
+    # 破损细胞裁剪图
+    if settings['enable_bad_ranking'] and settings['enable_bad_detection']:
+        bad_crop_dir = os.path.join(save_dir, "crop", "bad")
+        os.makedirs(bad_crop_dir, exist_ok=True)
+        for rank, cell in enumerate(bad_sorted[:top_n], start=1):
+            cx, cy = cell["pos"]
+            pad = int(cell["er"] * settings['crop_pad'])
+            y1 = max(0, cy - pad); y2 = min(H_img, cy + pad)
+            x1 = max(0, cx - pad); x2 = min(W_img, cx + pad)
+            crop = res_img[y1:y2, x1:x2].copy()
+            label = f"Bad {rank} | {cell.get('reason','BAD')}"
+            cv2.putText(crop, label, (10, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+            cv2.imencode('.png', crop)[1].tofile(
+                os.path.join(bad_crop_dir, f"bad{rank}.png"))
+            print(f"  Bad{rank} 裁剪图已保存", flush=True)
 
     csv_header = "编号,状态,标记原因,直径(px),坐标X,坐标Y,亮度值,最大暗块比例,暗块数量,暗块角度覆盖,暗块相对位置,实际暗块阈值\n"
     with open(os.path.join(save_dir, f"{stem}_data.csv"), 'w', encoding='utf-8') as f:
         f.write(f"# 坐标系: 缩放后图片 ({W_img}x{H_img})\n")
         f.write(csv_header)
         for i, cell in enumerate(cell_list, start=1):
-            cx, cy        = cell["pos"]
-            diameter      = round(cell["er"] * 2, 1)
-            status        = '!!!BAD!!!' if cell.get('is_bad', False) else 'OK'
-            reason        = cell.get('reason', '') or '-'
+            cx, cy          = cell["pos"]
+            diameter        = round(cell["er"] * 2, 1)
+            status          = '!!!BAD!!!' if cell.get('is_bad', False) else 'OK'
+            reason          = cell.get('reason', '') or '-'
             max_blob_ratio  = round(cell.get('max_blob_ratio', 0.0), 4)
             blob_count      = cell.get('blob_count', 0)
             blob_angle_span = cell.get('blob_angle_span', 0)
@@ -418,18 +441,31 @@ def process_image(model, image_path, results_dir, settings):
         f.write(f"# 坐标系: 原图 ({orig_w}x{orig_h}), scale={scale:.4f}\n")
         f.write(csv_header)
         for i, cell in enumerate(cell_list, start=1):
-            cx, cy        = cell["pos"]
-            orig_cx       = int(cx / scale)
-            orig_cy       = int(cy / scale)
-            orig_diameter = round(cell["er"] * 2 / scale, 1)
-            status        = '!!!BAD!!!' if cell.get('is_bad', False) else 'OK'
-            reason        = cell.get('reason', '') or '-'
+            cx, cy          = cell["pos"]
+            orig_cx         = int(cx / scale)
+            orig_cy         = int(cy / scale)
+            orig_diameter   = round(cell["er"] * 2 / scale, 1)
+            status          = '!!!BAD!!!' if cell.get('is_bad', False) else 'OK'
+            reason          = cell.get('reason', '') or '-'
             max_blob_ratio  = round(cell.get('max_blob_ratio', 0.0), 4)
             blob_count      = cell.get('blob_count', 0)
             blob_angle_span = cell.get('blob_angle_span', 0)
             blob_pos        = round(cell.get('blob_pos', 0.0), 3)
             dark_thr        = round(cell.get('dark_thr', 0.0), 1)
             f.write(f"{i},{status},{reason},{orig_diameter},{orig_cx},{orig_cy},{int(cell['brightness'])},{max_blob_ratio},{blob_count},{blob_angle_span},{blob_pos},{dark_thr}\n")
+
+    if settings['enable_bad_ranking'] and settings['enable_bad_detection']:
+        cell_index = {id(c): i + 1 for i, c in enumerate(cell_list)}
+        with open(os.path.join(save_dir, f"{stem}_bad.csv"), 'w', encoding='utf-8') as f:
+            f.write("破损排名,原编号,标记类型,暗块面积比例,直径(px),坐标X,坐标Y,亮度值,暗块相对位置\n")
+            for rank, cell in enumerate(bad_sorted, start=1):
+                orig_idx    = cell_index.get(id(cell), -1)
+                cx, cy      = cell["pos"]
+                diameter    = round(cell["er"] * 2, 1)
+                reason      = cell.get('reason', '') or '-'
+                blob_ratio  = round(cell.get('max_blob_ratio', 0.0), 4)
+                blob_pos    = round(cell.get('blob_pos', 0.0), 3)
+                f.write(f"{rank},{orig_idx},{reason},{blob_ratio},{diameter},{cx},{cy},{int(cell['brightness'])},{blob_pos}\n")
 
     top1    = cell_list[0] if cell_list else None
     summary = f"  检测: {total_detected}  有效: {len(cell_list)}"
@@ -449,7 +485,7 @@ def main():
     os.makedirs(results_dir, exist_ok=True)
 
     settings = load_settings()
-    print(f"  diameter={settings['diameter']}  top_n={settings['top_n']}  resize_threshold={settings['resize_area_threshold']}", flush=True)
+    print(f"  diameter={settings['diameter']}  top_n={settings['top_n']}  resize_scale={settings['resize_scale']}", flush=True)
 
     exts   = {'.tif', '.tiff', '.png', '.jpg', '.jpeg'}
     images = [
