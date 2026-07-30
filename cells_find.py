@@ -408,7 +408,7 @@ def process_image(model, image_path, results_dir, settings):
     if settings['enable_bad_ranking'] and settings['enable_bad_detection']:
         bad_crop_dir = os.path.join(save_dir, "crop", "bad")
         os.makedirs(bad_crop_dir, exist_ok=True)
-        for rank, cell in enumerate(bad_sorted[:top_n], start=1):
+        for rank, cell in enumerate(bad_sorted, start=1):
             cx, cy = cell["pos"]
             pad = int(cell["er"] * settings['crop_pad'])
             y1 = max(0, cy - pad); y2 = min(H_img, cy + pad)
@@ -419,7 +419,7 @@ def process_image(model, image_path, results_dir, settings):
                         cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
             cv2.imencode('.png', crop)[1].tofile(
                 os.path.join(bad_crop_dir, f"bad{rank}.png"))
-            print(f"  Bad{rank} 裁剪图已保存", flush=True)
+        print(f"  破损细胞裁剪图: {len(bad_sorted)} 张", flush=True)
 
     csv_header = "编号,状态,标记原因,直径(px),坐标X,坐标Y,亮度值,最大暗块比例,暗块数量,暗块角度覆盖,暗块相对位置,实际暗块阈值\n"
     with open(os.path.join(save_dir, f"{stem}_data.csv"), 'w', encoding='utf-8') as f:
