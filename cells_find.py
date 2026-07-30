@@ -422,7 +422,7 @@ def process_image(model, image_path, results_dir, settings):
         print(f"  破损细胞裁剪图: {len(bad_sorted)} 张", flush=True)
 
     csv_header = "编号,状态,标记原因,直径(px),坐标X,坐标Y,亮度值,最大暗块比例,暗块数量,暗块角度覆盖,暗块相对位置,实际暗块阈值\n"
-    with open(os.path.join(save_dir, f"{stem}_data.csv"), 'w', encoding='utf-8') as f:
+    with open(os.path.join(save_dir, f"{stem}_data.csv"), 'w', encoding='utf-8-sig') as f:
         f.write(f"# 坐标系: 缩放后图片 ({W_img}x{H_img})\n")
         f.write(csv_header)
         for i, cell in enumerate(cell_list, start=1):
@@ -437,7 +437,7 @@ def process_image(model, image_path, results_dir, settings):
             dark_thr        = round(cell.get('dark_thr', 0.0), 1)
             f.write(f"{i},{status},{reason},{diameter},{cx},{cy},{int(cell['brightness'])},{max_blob_ratio},{blob_count},{blob_angle_span},{blob_pos},{dark_thr}\n")
 
-    with open(os.path.join(save_dir, f"{stem}_data_original.csv"), 'w', encoding='utf-8') as f:
+    with open(os.path.join(save_dir, f"{stem}_data_original.csv"), 'w', encoding='utf-8-sig') as f:
         f.write(f"# 坐标系: 原图 ({orig_w}x{orig_h}), scale={scale:.4f}\n")
         f.write(csv_header)
         for i, cell in enumerate(cell_list, start=1):
@@ -456,7 +456,7 @@ def process_image(model, image_path, results_dir, settings):
 
     if settings['enable_bad_ranking'] and settings['enable_bad_detection']:
         cell_index = {id(c): i + 1 for i, c in enumerate(cell_list)}
-        with open(os.path.join(save_dir, f"{stem}_bad.csv"), 'w', encoding='utf-8') as f:
+        with open(os.path.join(save_dir, f"{stem}_bad.csv"), 'w', encoding='utf-8-sig') as f:
             f.write("破损排名,原编号,标记类型,暗块面积比例,直径(px),坐标X,坐标Y,亮度值,暗块相对位置\n")
             for rank, cell in enumerate(bad_sorted, start=1):
                 orig_idx    = cell_index.get(id(cell), -1)
