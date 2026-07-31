@@ -1,25 +1,41 @@
-import os
-import cv2
-import torch
-import numpy as np
-from cellpose import models as cp_models
-import sys
-import ssl
+"""细胞图像识别与排行工具（CellAppCP3）。
+
+功能:
+    - 读取输入目录下的图像，通过 Cellpose 模型进行细胞分割。
+    - 应用完整度、面积、圆形度多级过滤，计算亮度与缺陷状态。
+    - 输出标注结果图、局部裁剪图与多份 CSV 数据表。
+
+用法:
+    将待处理图片放入 input 目录，执行 ``python cells_find.py``。
+    结果保存至 results/{图片名}/ 目录。
+
+配置:
+    全部参数通过 settings.txt 管理，缺失项使用内置默认值。
+"""
+
 import math
+import os
+import ssl
+import sys
 import time
+
+import cv2
+import numpy as np
+import torch
+from cellpose import models as cp_models
 
 
 # ── 绘图常量 ──────────────────────────────────────────────────────────────
-COLOR_TOP    = (0, 255, 0)      # 绿色：最亮细胞
-COLOR_NORMAL = (0, 255, 255)    # 黄色：普通细胞
-COLOR_BAD    = (0, 0, 255)      # 红色：破损细胞
-COLOR_LABEL  = (220, 220, 220)  # 浅灰：编号文字
+COLOR_TOP    = (0, 255, 0)      # BGR 绿色，用于最亮细胞轮廓
+COLOR_NORMAL = (0, 255, 255)    # BGR 黄色，用于普通细胞轮廓
+COLOR_BAD    = (0, 0, 255)      # BGR 红色，用于缺陷细胞轮廓
+COLOR_LABEL  = (220, 220, 220)  # BGR 浅灰，用于编号文字
 
-RING_INNER_RATIO = 0.8   # 压暗环内圈半径比例
-RING_DIM_FACTOR  = 0.6   # 压暗环亮度系数
-CENTER_DOT_R     = 5     # 最亮细胞中心点半径
-LABEL_OFFSET     = (6, -6)    # 编号文字相对细胞中心偏移
-CROP_LABEL_POS   = (10, 30)   # 裁剪图标签位置
+RING_INNER_RATIO = 0.8          # 压暗环内边界占细胞半径的比例
+RING_DIM_FACTOR  = 0.6          # 压暗环区域的亮度衰减系数
+CENTER_DOT_R     = 5            # 最亮细胞中心标记点半径，单位像素
+LABEL_OFFSET     = (6, -6)      # 编号文字相对细胞中心的偏移，单位像素
+CROP_LABEL_POS   = (10, 30)     # 裁剪图内标签的绘制位置，单位像素
 FONT             = cv2.FONT_HERSHEY_SIMPLEX
 
 
@@ -31,16 +47,31 @@ TOP_FIELDS  = ['rank', 'idx', 'diameter', 'cx', 'cy', 'brightness']
 BAD_FIELDS  = ['rank', 'idx', 'reason', 'blob_ratio', 'diameter', 'cx', 'cy', 'brightness', 'blob_pos']
 
 
+# ── 工具函数 ──────────────────────────────────────────────────────────────
 def get_resource_path(relative_path):
-    """PyInstaller 打包资源路径解析"""
+    """解析资源文件路径，兼容 PyInstaller 打包环境。
+
+    Args:
+        relative_path: 相对于程序根目录的路径。
+
+    Returns:
+        资源文件的绝对路径。
+    """
     if hasattr(sys, '_MEIPASS'):
         return os.path.join(sys._MEIPASS, relative_path)
     return os.path.join(os.path.abspath("."), relative_path)
 
 
-# --- 配置加载 ---
+# ── 配置加载 ──────────────────────────────────────────────────────────────
 def load_settings():
-    """从 settings.txt 读取参数，缺失键用默认值兜底"""
+    """从 settings.txt 加载配置参数。
+
+    配置文件或单项参数缺失时，回退至内置默认值。数值类型依据
+    默认值推断，字符串参数保持原样。
+
+    Returns:
+        dict: 完整配置字典，键为参数名。
+    """
     defaults = {
         'diameter': 120, 'flow_threshold': 0.95, 'cellprob_threshold': 1.0,
         'min_size': 200, 'niter': 200,
@@ -85,9 +116,19 @@ def load_settings():
     return defaults
 
 
-# --- 模型加载 ---
+# ── 模型加载 ──────────────────────────────────────────────────────────────
 def load_model(settings):
-    """加载 Cellpose 模型，本地文件优先，否则用内置模型"""
+    """加载 Cellpose 模型并选定计算设备。
+
+    优先加载程序目录下的同名模型文件，该文件不存在时使用
+    Cellpose 内置模型。设备按 CUDA、MPS、CPU 的优先级选择。
+
+    Args:
+        settings: 配置字典，需包含 model_name 键。
+
+    Returns:
+        CellposeModel: 已加载的模型实例。
+    """
     print("正在加载模型...", flush=True)
     ssl._create_default_https_context = ssl._create_unverified_context
 
@@ -112,9 +153,27 @@ def load_model(settings):
     return m
 
 
-# --- 坏细胞检测 ---
+# ── 缺陷检测 ──────────────────────────────────────────────────────────────
 def _detect_defects(gy, gx, gray, er, bbox, H_img, W_img, settings):
-    """暗区连通域检测：区分环状暗环和团块状虫蛀/破损，按位置分级判定"""
+    """检测单个细胞内部的暗区缺陷。
+
+    通过连通域分析定位暗块，依次应用紧凑度、角度覆盖、位置分级
+    三重判据，排除细胞边缘的正常暗环，仅保留真实缺陷。
+
+    Args:
+        gy: 细胞像素的行坐标数组。
+        gx: 细胞像素的列坐标数组。
+        gray: 全图灰度图。
+        er: 细胞最小外接圆半径。
+        bbox: 细胞外接矩形，格式为 (top, left, bottom, right)。
+        H_img: 图像高度。
+        W_img: 图像宽度。
+        settings: 配置字典。
+
+    Returns:
+        tuple: 依次为是否存在缺陷、缺陷类型列表、最大暗块面积比、
+            暗块数量、角度覆盖度、暗块相对位置、实际使用的阈值。
+    """
     reasons = []
     cell_area = len(gy)
     max_blob_ratio = 0.0
@@ -174,7 +233,7 @@ def _detect_defects(gy, gx, gray, er, bbox, H_img, W_img, settings):
                 if blob_angle_span >= settings['bad_blob_angle_span']:
                     continue
 
-            # 暗块中心到细胞中心的相对距离（用等效半径避免六边形细胞位置偏移）
+            # 采用等效半径归一化位置，避免六边形细胞使用外接圆半径时的偏移
             blob_cy = float(centroids[i][1])
             blob_cx = float(centroids[i][0])
             blob_dist = np.sqrt((blob_cy - local_cy) ** 2 + (blob_cx - local_cx) ** 2)
@@ -202,9 +261,22 @@ def _detect_defects(gy, gx, gray, er, bbox, H_img, W_img, settings):
     return is_bad, reasons, max_blob_ratio, blob_count, max_blob_angle_span, max_blob_pos, dark_thr
 
 
-# --- 过滤链（基于 cellpose mask）---
+# ── 过滤链 ────────────────────────────────────────────────────────────────
 def _filter_and_rank_mask(masks, raw_image, settings):
-    """完整度/面积/圆形度/亮度四步过滤，返回有效细胞列表（带稳定 idx）"""
+    """对分割结果执行多级过滤并计算细胞属性。
+
+    过滤顺序依次为完整度、面积、圆形度。通过筛选的细胞将计算
+    亮度值与缺陷状态，并分配稳定编号。
+
+    Args:
+        masks: Cellpose 输出的标签矩阵。
+        raw_image: 工作图像，BGR 格式。
+        settings: 配置字典。
+
+    Returns:
+        list[dict]: 有效细胞列表，每项包含 idx、pos、er、
+            brightness、contours、mask、is_bad 等字段。
+    """
     gray           = cv2.cvtColor(raw_image, cv2.COLOR_BGR2GRAY)
     H_img, W_img   = gray.shape
     cell_ids       = np.unique(masks)[1:]
@@ -252,7 +324,7 @@ def _filter_and_rank_mask(masks, raw_image, settings):
                      (4 * math.pi * c["mask_area"] / (c["perimeter"] ** 2)) >= circ_thr]
     print(f"  [Step3] 圆形度过滤: {len(candidates)}", flush=True)
 
-    # Step4: 亮度计算 + 坏细胞检测
+    # Step4: 亮度计算与缺陷检测
     cell_list = []
     for c in candidates:
         M = cv2.moments(c["mask"])
@@ -289,7 +361,7 @@ def _filter_and_rank_mask(masks, raw_image, settings):
             "blob_pos": bp, "dark_thr": dth, "reason": bad_reason,
         })
 
-    # 分配稳定编号，供后续 CSV / 排行引用
+    # 分配一次性的稳定编号，供后续 CSV 与排行表交叉引用
     for i, cell in enumerate(cell_list, start=1):
         cell['idx'] = i
 
@@ -297,9 +369,18 @@ def _filter_and_rank_mask(masks, raw_image, settings):
     return cell_list
 
 
-# --- 图像预处理 ---
+# ── 图像预处理 ────────────────────────────────────────────────────────────
 def _load_and_scale(image_path, settings):
-    """读取图片并按倍率缩放。返回 (原图, 工作图, 原尺寸, 缩放倍率)"""
+    """读取图像并按配置倍率缩放。
+
+    Args:
+        image_path: 图像文件路径。
+        settings: 配置字典，需包含 resize_scale 键。
+
+    Returns:
+        tuple: 依次为原图、工作图、原始尺寸元组、实际缩放倍率。
+            读取失败时返回四个 None。
+    """
     raw = cv2.imdecode(np.fromfile(image_path, dtype=np.uint8), cv2.IMREAD_COLOR)
     if raw is None:
         return None, None, None, None
@@ -317,9 +398,20 @@ def _load_and_scale(image_path, settings):
     return raw, work, (orig_w, orig_h), scale
 
 
-# --- 细胞分组 ---
+# ── 细胞分组 ──────────────────────────────────────────────────────────────
 def _group_cells(cell_list, settings):
-    """按状态和排行分组。返回 (破损排序, 最亮top, 其余正常)"""
+    """按缺陷状态与亮度排行对细胞分组。
+
+    缺陷细胞按暗块面积降序排列。亮度排行关闭时，最亮组为空，
+    全部正常细胞归入其余组。
+
+    Args:
+        cell_list: 有效细胞列表。
+        settings: 配置字典。
+
+    Returns:
+        tuple: 依次为缺陷细胞列表、亮度排行前 N 项、其余正常细胞。
+    """
     bad    = [c for c in cell_list if c.get('is_bad')]
     normal = [c for c in cell_list if not c.get('is_bad')]
 
@@ -334,9 +426,24 @@ def _group_cells(cell_list, settings):
     return bad_sorted, [], normal
 
 
-# --- 结果图标注 ---
+# ── 结果图标注 ────────────────────────────────────────────────────────────
 def _annotate(work_image, cell_list, bad_cells, top_cells, other_cells, settings):
-    """绘制压暗遮罩 + 三色描边 + 编号，返回标注后的图"""
+    """在工作图上绘制细胞轮廓与标签。
+
+    绘制顺序依次为外圈压暗遮罩、缺陷细胞（红）、普通细胞（黄）、
+    最亮细胞（绿）。后绘制的图层覆盖先绘制的图层。
+
+    Args:
+        work_image: 工作图像，BGR 格式。
+        cell_list: 全部有效细胞。
+        bad_cells: 缺陷细胞列表。
+        top_cells: 亮度排行前 N 项。
+        other_cells: 其余正常细胞列表。
+        settings: 配置字典。
+
+    Returns:
+        numpy.ndarray: 标注后的图像副本。
+    """
     res_img = work_image.copy()
     if not cell_list:
         return res_img
@@ -346,7 +453,7 @@ def _annotate(work_image, cell_list, bad_cells, top_cells, other_cells, settings
     font_scale   = settings['font_scale']
     dx, dy       = LABEL_OFFSET
 
-    # 压暗环遮罩（只在细胞局部范围运算，避免全图数组分配）
+    # 限制在外接矩形范围内运算，避免为每个细胞分配全图尺寸的临时数组
     for cell in cell_list:
         cx, cy = cell["pos"]
         er_int = max(1, int(cell["er"]))
@@ -364,7 +471,7 @@ def _annotate(work_image, cell_list, bad_cells, top_cells, other_cells, settings
         region = res_img[y1:y2, x1:x2]
         region[ring] = (region[ring] * RING_DIM_FACTOR).astype(np.uint8)
 
-    # 红色：破损细胞（始终标注，不受排行开关影响）
+    # 缺陷细胞始终标注，不受排行开关影响
     if settings['enable_bad_detection']:
         for cell in bad_cells:
             cx, cy = cell["pos"]
@@ -372,14 +479,14 @@ def _annotate(work_image, cell_list, bad_cells, top_cells, other_cells, settings
             cv2.drawContours(res_img, cell["contours"], -1, COLOR_BAD, thickness)
             cv2.putText(res_img, label, (cx + dx, cy + dy), FONT, 0.5, COLOR_BAD, 1)
 
-    # 黄色：非 top 正常细胞
+    # 未进入最亮排行的正常细胞
     idx_start = settings['top_n'] + 1 if settings['enable_top_ranking'] else 1
     for idx, cell in enumerate(other_cells, start=idx_start):
         cx, cy = cell["pos"]
         cv2.drawContours(res_img, cell["contours"], -1, COLOR_NORMAL, thickness)
         cv2.putText(res_img, str(idx), (cx + dx, cy + dy), FONT, 0.5, COLOR_LABEL, 1)
 
-    # 绿色：top_n 最亮正常细胞
+    # 亮度排行前 N 项，最后绘制以保证覆盖前面的黄色描边
     for rank, cell in enumerate(top_cells, start=1):
         cx, cy = cell["pos"]
         cv2.drawContours(res_img, cell["contours"], -1, COLOR_TOP, thickness)
@@ -390,9 +497,22 @@ def _annotate(work_image, cell_list, bad_cells, top_cells, other_cells, settings
     return res_img
 
 
-# --- 裁剪图输出 ---
+# ── 裁剪图输出 ────────────────────────────────────────────────────────────
 def _save_crops(res_img, cells, out_dir, label_fn, file_prefix, color, settings):
-    """通用裁剪图输出。label_fn(rank, cell) 返回图上标签文字"""
+    """批量输出细胞局部裁剪图。
+
+    Args:
+        res_img: 已标注的结果图。
+        cells: 待裁剪的细胞列表。
+        out_dir: 输出目录，不存在时自动创建。
+        label_fn: 标签生成函数，签名为 (rank, cell) -> str。
+        file_prefix: 输出文件名前缀。
+        color: 标签文字颜色，BGR 格式。
+        settings: 配置字典，需包含 crop_pad 键。
+
+    Returns:
+        int: 实际输出的图片数量。
+    """
     if not cells:
         return 0
     os.makedirs(out_dir, exist_ok=True)
@@ -412,7 +532,15 @@ def _save_crops(res_img, cells, out_dir, label_fn, file_prefix, color, settings)
 
 
 def _save_all_crops(res_img, save_dir, top_cells, bad_sorted, settings):
-    """输出最亮和破损细胞的裁剪图"""
+    """依据配置开关输出最亮细胞与缺陷细胞的裁剪图。
+
+    Args:
+        res_img: 已标注的结果图。
+        save_dir: 结果目录。
+        top_cells: 亮度排行前 N 项。
+        bad_sorted: 已排序的缺陷细胞列表。
+        settings: 配置字典。
+    """
     if settings['enable_top_ranking']:
         n = _save_crops(res_img, top_cells,
                         os.path.join(save_dir, "crop", "top"),
@@ -427,9 +555,16 @@ def _save_all_crops(res_img, save_dir, top_cells, bad_sorted, settings):
         print(f"  破损细胞裁剪图: {n} 张", flush=True)
 
 
-# --- CSV 输出 ---
+# ── CSV 输出 ──────────────────────────────────────────────────────────────
 def _write_csv(path, header, rows, comment=None):
-    """通用 CSV 写入。rows 是已格式化好的字符串列表"""
+    """写入 CSV 文件，采用 UTF-8 BOM 编码以兼容 Excel。
+
+    Args:
+        path: 输出文件路径。
+        header: 表头行，不含换行符。
+        rows: 已格式化的数据行列表。
+        comment: 可选的首行注释，写入时自动添加井号前缀。
+    """
     with open(path, 'w', encoding='utf-8-sig') as f:
         if comment:
             f.write(f"# {comment}\n")
@@ -439,7 +574,16 @@ def _write_csv(path, header, rows, comment=None):
 
 
 def _fmt_data_row(cell, scale=1.0):
-    """格式化 data.csv 行。scale=1.0 为缩放坐标，否则换算回原图"""
+    """格式化完整数据表的单行记录。
+
+    Args:
+        cell: 细胞数据字典。
+        scale: 缩放倍率。取值 1.0 时输出工作图坐标，
+            其他取值时换算为原图坐标。
+
+    Returns:
+        str: 以逗号分隔的数据行。
+    """
     cx, cy = cell["pos"]
     if scale != 1.0:
         cx, cy = int(cx / scale), int(cy / scale)
@@ -462,7 +606,17 @@ def _fmt_data_row(cell, scale=1.0):
 
 
 def _fmt_rank_row(rank, cell, fields, scale=1.0):
-    """按 fields 顺序格式化排行 CSV 行"""
+    """按指定字段顺序格式化排行表的单行记录。
+
+    Args:
+        rank: 排名序号。
+        cell: 细胞数据字典。
+        fields: 字段名列表，决定输出列的顺序。
+        scale: 缩放倍率，含义与 _fmt_data_row 相同。
+
+    Returns:
+        str: 以逗号分隔的数据行。
+    """
     cx, cy = cell["pos"]
     if scale != 1.0:
         cx, cy = int(cx / scale), int(cy / scale)
@@ -482,7 +636,22 @@ def _fmt_rank_row(rank, cell, fields, scale=1.0):
 
 def _write_all_csvs(save_dir, stem, cell_list, top_cells, bad_sorted,
                     scaled_note, orig_note, scale, settings):
-    """输出全部 CSV：data / data_original / top / top_original / bad / bad_original"""
+    """依据配置开关输出全部 CSV 文件。
+
+    完整数据表固定输出两份，分别采用工作图坐标与原图坐标。
+    排行表由对应开关决定是否输出。
+
+    Args:
+        save_dir: 结果目录。
+        stem: 图片文件名，不含扩展名。
+        cell_list: 全部有效细胞。
+        top_cells: 亮度排行前 N 项。
+        bad_sorted: 已排序的缺陷细胞列表。
+        scaled_note: 工作图坐标系说明文字。
+        orig_note: 原图坐标系说明文字。
+        scale: 缩放倍率。
+        settings: 配置字典。
+    """
     _write_csv(os.path.join(save_dir, f"{stem}_data.csv"), DATA_HEADER,
                [_fmt_data_row(c) for c in cell_list], scaled_note)
     _write_csv(os.path.join(save_dir, f"{stem}_data_original.csv"), DATA_HEADER,
@@ -507,9 +676,19 @@ def _write_all_csvs(save_dir, stem, cell_list, top_cells, bad_sorted,
         print(f"  破损排行 CSV: {len(bad_sorted)} 条", flush=True)
 
 
-# --- 单张图片处理（流程编排） ---
+# ── 单张图片处理 ──────────────────────────────────────────────────────────
 def process_image(model, image_path, results_dir, settings):
-    """单张图片完整流程：读图 → 分割 → 过滤 → 分组 → 标注 → 输出"""
+    """处理单张图片的完整流程。
+
+    流程依次为读图缩放、模型分割、多级过滤、细胞分组、结果标注、
+    裁剪图导出与 CSV 导出。
+
+    Args:
+        model: 已加载的 Cellpose 模型。
+        image_path: 待处理图片路径。
+        results_dir: 结果根目录。
+        settings: 配置字典。
+    """
     stem = os.path.splitext(os.path.basename(image_path))[0]
     print(f"\n[{stem}] 处理中...", flush=True)
 
@@ -563,8 +742,9 @@ def process_image(model, image_path, results_dir, settings):
     print(f"  → 已保存到 results/{stem}/", flush=True)
 
 
-# --- 主流程 ---
+# ── 主流程 ────────────────────────────────────────────────────────────────
 def main():
+    """程序入口，扫描 input 目录并批量处理图片。"""
     base_dir    = os.path.dirname(os.path.abspath(__file__))
     input_dir   = os.path.join(base_dir, "input")
     results_dir = os.path.join(base_dir, "results")
