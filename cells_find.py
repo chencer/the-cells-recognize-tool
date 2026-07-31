@@ -454,18 +454,46 @@ def process_image(model, image_path, results_dir, settings):
             dark_thr        = round(cell.get('dark_thr', 0.0), 1)
             f.write(f"{i},{status},{reason},{orig_diameter},{orig_cx},{orig_cy},{int(cell['brightness'])},{max_blob_ratio},{blob_count},{blob_angle_span},{blob_pos},{dark_thr}\n")
 
+    # 建立 id→编号 映射，供 top/bad CSV 引用原编号
+    cell_index = {id(c): i + 1 for i, c in enumerate(cell_list)}
+
+    if settings['enable_top_ranking']:
+        with open(os.path.join(save_dir, f"{stem}_top.csv"), 'w', encoding='utf-8-sig') as f:
+            f.write("亮度排名,原编号,直径(px),坐标X,坐标Y,亮度值\n")
+            for rank, cell in enumerate(top_cells, start=1):
+                cx, cy   = cell["pos"]
+                orig_idx = cell_index.get(id(cell), -1)
+                f.write(f"{rank},{orig_idx},{round(cell['er']*2,1)},{cx},{cy},{int(cell['brightness'])}\n")
+        with open(os.path.join(save_dir, f"{stem}_top_original.csv"), 'w', encoding='utf-8-sig') as f:
+            f.write(f"# 坐标系: 原图 ({orig_w}x{orig_h}), scale={scale:.4f}\n")
+            f.write("亮度排名,原编号,直径(px),坐标X,坐标Y,亮度值\n")
+            for rank, cell in enumerate(top_cells, start=1):
+                cx, cy   = cell["pos"]
+                orig_idx = cell_index.get(id(cell), -1)
+                f.write(f"{rank},{orig_idx},{round(cell['er']*2/scale,1)},{int(cx/scale)},{int(cy/scale)},{int(cell['brightness'])}\n")
+        print(f"  最亮排行 CSV: {len(top_cells)} 条", flush=True)
+
     if settings['enable_bad_ranking'] and settings['enable_bad_detection']:
-        cell_index = {id(c): i + 1 for i, c in enumerate(cell_list)}
         with open(os.path.join(save_dir, f"{stem}_bad.csv"), 'w', encoding='utf-8-sig') as f:
             f.write("破损排名,原编号,标记类型,暗块面积比例,直径(px),坐标X,坐标Y,亮度值,暗块相对位置\n")
             for rank, cell in enumerate(bad_sorted, start=1):
-                orig_idx    = cell_index.get(id(cell), -1)
-                cx, cy      = cell["pos"]
-                diameter    = round(cell["er"] * 2, 1)
-                reason      = cell.get('reason', '') or '-'
-                blob_ratio  = round(cell.get('max_blob_ratio', 0.0), 4)
-                blob_pos    = round(cell.get('blob_pos', 0.0), 3)
+                orig_idx   = cell_index.get(id(cell), -1)
+                cx, cy     = cell["pos"]
+                diameter   = round(cell["er"] * 2, 1)
+                reason     = cell.get('reason', '') or '-'
+                blob_ratio = round(cell.get('max_blob_ratio', 0.0), 4)
+                blob_pos   = round(cell.get('blob_pos', 0.0), 3)
                 f.write(f"{rank},{orig_idx},{reason},{blob_ratio},{diameter},{cx},{cy},{int(cell['brightness'])},{blob_pos}\n")
+        with open(os.path.join(save_dir, f"{stem}_bad_original.csv"), 'w', encoding='utf-8-sig') as f:
+            f.write(f"# 坐标系: 原图 ({orig_w}x{orig_h}), scale={scale:.4f}\n")
+            f.write("破损排名,原编号,标记类型,暗块面积比例,直径(px),坐标X,坐标Y,亮度值,暗块相对位置\n")
+            for rank, cell in enumerate(bad_sorted, start=1):
+                orig_idx   = cell_index.get(id(cell), -1)
+                cx, cy     = cell["pos"]
+                reason     = cell.get('reason', '') or '-'
+                blob_ratio = round(cell.get('max_blob_ratio', 0.0), 4)
+                blob_pos   = round(cell.get('blob_pos', 0.0), 3)
+                f.write(f"{rank},{orig_idx},{reason},{blob_ratio},{round(cell['er']*2/scale,1)},{int(cx/scale)},{int(cy/scale)},{int(cell['brightness'])},{blob_pos}\n")
 
     top1    = cell_list[0] if cell_list else None
     summary = f"  检测: {total_detected}  有效: {len(cell_list)}"
